@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Core" Version="2.3.11" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.12" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Planura.Apis.Controller\Planura.Apis.Controller.csproj" />
+    <ProjectReference Include="..\Planura.Core.Application.Abstraction\Planura.Core.Application.Abstraction.csproj" />
+    <ProjectReference Include="..\Planura.Core.Application\Planura.Core.Application.csproj" />
+    <ProjectReference Include="..\Planura.Infrastructure.Persistence\Planura.Infrastructure.Persistence.csproj" />
+    <ProjectReference Include="..\Planura.Infrastructure\Planura.Infrastructure.csproj" />
+    <ProjectReference Include="..\Planura.Shared\Planura.Shared.csproj" />
+  </ItemGroup>
+
+</Project>
