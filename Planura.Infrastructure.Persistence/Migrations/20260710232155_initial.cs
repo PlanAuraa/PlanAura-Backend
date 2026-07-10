@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class initialSet : Migration
+    public partial class initial : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -655,7 +655,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     end_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
                     status = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
                     booking_request_id = table.Column<long>(type: "bigint", nullable: true),
-                    created_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false, defaultValueSql: "GETUTCDATE()")
+                    created_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false, defaultValueSql: "GETUTCDATE()"),
+                    row_version = table.Column<byte[]>(type: "rowversion", rowVersion: true, nullable: false)
                 },
                 constraints: table =>
                 {

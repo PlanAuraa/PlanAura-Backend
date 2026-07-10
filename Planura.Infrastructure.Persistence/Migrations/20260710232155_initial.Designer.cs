@@ -12,8 +12,8 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    [Migration("20260710165037_VendorAvailability_Concurrency_Enum")]
-    partial class VendorAvailability_Concurrency_Enum
+    [Migration("20260710232155_initial")]
+    partial class initial
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

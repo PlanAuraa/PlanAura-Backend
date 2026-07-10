@@ -1,4 +1,4 @@
-@Planura.Apis_HostAddress = http://localhost:5181
+@Planura.Apis_HostAddress = http://localhost:5116
 
 GET {{Planura.Apis_HostAddress}}/weatherforecast/
 Accept: application/json
