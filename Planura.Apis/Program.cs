@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
+using Planura.Core.Application.Extensions;
 using Planura.Infrastructure.Persistence.Extensions;
 using Planura.Shared.Errors.Response;
 
@@ -24,6 +25,7 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddApplicationServices();
 
 var app = builder.Build();
 
