@@ -86,7 +86,15 @@ namespace Planura.Apis.MiddleWares
 
                         break;
                     default:
-                        response = _env.IsDevelopment() ? new ApiExeptionResponse((int)HttpStatusCode.InternalServerError, ex.Message, ex.StackTrace?.ToString())
+                        var innerMessage = ex;
+                        while (innerMessage.InnerException is not null)
+                            innerMessage = innerMessage.InnerException;
+
+                        response = _env.IsDevelopment()
+                            ? new ApiExeptionResponse(
+                                (int)HttpStatusCode.InternalServerError,
+                                ex.Message,
+                                $"{innerMessage.Message}{Environment.NewLine}{ex.StackTrace?.ToString()}")
                             : new ApiExeptionResponse((int)HttpStatusCode.InternalServerError);
 
 

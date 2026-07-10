@@ -42,8 +42,15 @@ public class VendorAvailabilityConfiguration : IEntityTypeConfiguration<VendorAv
 {
     public void Configure(EntityTypeBuilder<VendorAvailability> builder)
     {
-        builder.Property(availability => availability.Status).HasMaxLength(20).IsRequired();
+        builder.Property(availability => availability.Status)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .IsRequired();
         builder.Property(availability => availability.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        builder.Property(availability => availability.RowVersion)
+            .IsRowVersion()
+            .IsConcurrencyToken();
 
         builder.HasIndex(availability => new { availability.VendorId, availability.StartAt });
 
