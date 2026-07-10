@@ -85,6 +85,14 @@ namespace Planura.Apis.MiddleWares
                         await httpContext.Response.WriteAsync(response.ToString());
 
                         break;
+                    case ForbiddenExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse(403, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
                     default:
                         var innerMessage = ex;
                         while (innerMessage.InnerException is not null)
