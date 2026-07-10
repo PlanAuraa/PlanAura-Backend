@@ -22,7 +22,7 @@ public class VendorVerificationConfiguration : IEntityTypeConfiguration<VendorVe
         builder.HasOne(verification => verification.ReviewedByAdmin)
             .WithMany(user => user.ReviewedVendorVerifications)
             .HasForeignKey(verification => verification.ReviewedByAdminId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -42,6 +42,6 @@ public class VendorVerificationHistoryConfiguration : IEntityTypeConfiguration<V
         builder.HasOne(history => history.ChangedByAdmin)
             .WithMany(user => user.VendorVerificationChanges)
             .HasForeignKey(history => history.ChangedByAdminId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

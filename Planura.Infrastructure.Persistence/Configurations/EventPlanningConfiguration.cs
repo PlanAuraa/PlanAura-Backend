@@ -43,7 +43,7 @@ public class EventPlanItemConfiguration : IEntityTypeConfiguration<EventPlanItem
         builder.HasOne(item => item.VendorPackage)
             .WithMany(package => package.EventPlanItems)
             .HasForeignKey(item => item.VendorPackageId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 

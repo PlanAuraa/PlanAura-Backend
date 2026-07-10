@@ -9,7 +9,6 @@ public class ServiceCategoryConfiguration : IEntityTypeConfiguration<ServiceCate
     public void Configure(EntityTypeBuilder<ServiceCategory> builder)
     {
         builder.Property(category => category.NameEn).HasMaxLength(100).IsRequired();
-        builder.Property(category => category.NameAr).HasMaxLength(100).IsRequired();
         builder.Property(category => category.Slug).HasMaxLength(100).IsRequired();
         builder.Property(category => category.IconUrl).HasMaxLength(500);
         builder.Property(category => category.IsActive).HasDefaultValue(true);
