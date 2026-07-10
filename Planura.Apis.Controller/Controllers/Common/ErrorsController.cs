@@ -19,8 +19,8 @@ namespace EventManagment.Apis.Controller.Controllers.Common
             }
             else if (Code == (int)HttpStatusCode.Forbidden)
             {
-                var respnse = new ApiResponse((int)HttpStatusCode.Unauthorized, $"You Are Not Authorized");
-                return StatusCode((int)HttpStatusCode.Unauthorized, respnse);
+                var respnse = new ApiResponse((int)HttpStatusCode.Forbidden, $"You are forbidden from accessing this resource.");
+                return StatusCode((int)HttpStatusCode.Forbidden, respnse);
 
             }
             else if (Code == (int)HttpStatusCode.MethodNotAllowed)

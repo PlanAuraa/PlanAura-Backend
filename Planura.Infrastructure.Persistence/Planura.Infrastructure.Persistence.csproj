@@ -7,8 +7,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- SignInManager<TUser> (used for login/lockout handling) lives in Microsoft.AspNetCore.Identity,
+         which needs ASP.NET Core Http types (IHttpContextAccessor); this is a plain class library
+         (Microsoft.NET.Sdk), so it needs an explicit FrameworkReference for those. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.17" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.17">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Proxies" Version="9.0.17" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.17" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.17" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.17" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.17" />
   </ItemGroup>
 
   <ItemGroup>

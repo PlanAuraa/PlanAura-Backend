@@ -7,10 +7,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Needed for IHttpContextAccessor (CurrentUserService) — this is a plain class library
+         (Microsoft.NET.Sdk), so ASP.NET Core shared-framework types require an explicit
+         FrameworkReference rather than being implicitly available as in a Sdk.Web project. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Planura.Core.Application.Abstraction\Planura.Core.Application.Abstraction.csproj" />
     <ProjectReference Include="..\Planura.Core.Application\Planura.Core.Application.csproj" />
     <ProjectReference Include="..\Planura.Core.Domain\Planura.Core.Domain.csproj" />
     <ProjectReference Include="..\Planura.Shared\Planura.Shared.csproj" />
+    <ProjectReference Include="..\Planura.Infrastructure.Persistence\Planura.Infrastructure.Persistence.csproj" />
   </ItemGroup>
 
 </Project>

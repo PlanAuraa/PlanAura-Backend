@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Planura.Shared\Planura.Shared.csproj" />
+    <ProjectReference Include="..\Planura.Core.Domain\Planura.Core.Domain.csproj" />
   </ItemGroup>
 
 </Project>
