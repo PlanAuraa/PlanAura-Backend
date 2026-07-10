@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -7,23 +6,24 @@ using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
-using Planura.Infrastructure.Persistence.Extensions;
-using Planura.Core.Application.DependencyInjection;
+using Planura.Infrastructure.Authorization;
 using Planura.Infrastructure.DependencyInjection;
 using Planura.Infrastructure.Persistence;
 using Planura.Infrastructure.Persistence.DependencyInjection;
+using Planura.Infrastructure.Persistence.Extensions;
 using Planura.Infrastructure.Persistence.Seed;
-using Planura.Infrastructure.Authorization;
 using Planura.Shared.Constants;
 using Planura.Shared.Errors.Response;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
 builder.Services.AddPersistenceServices(builder.Configuration);
-builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
+builder.Services.AddApplicationServices();
+
 
 var jwtKey = builder.Configuration["Jwt:Key"]
     ?? throw new InvalidOperationException("Jwt:Key is not configured.");
@@ -78,7 +78,6 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
 builder.Services.AddPersistence(builder.Configuration);
-builder.Services.AddApplicationServices();
 builder.Services.AddSwaggerGen(options =>
 {
     var bearerScheme = new OpenApiSecurityScheme
