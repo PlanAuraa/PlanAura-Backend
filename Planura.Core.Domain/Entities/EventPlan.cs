@@ -15,6 +15,9 @@ public class EventPlan
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
+
+    //test
+
     public Client Client { get; set; } = null!;
     public ICollection<EventPlanItem> Items { get; set; } = new List<EventPlanItem>();
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
