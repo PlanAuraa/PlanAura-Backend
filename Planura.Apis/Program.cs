@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
+using Planura.Infrastructure.Persistence.Extensions;
 using Planura.Shared.Errors.Response;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,6 +23,7 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen();
+builder.Services.AddPersistence(builder.Configuration);
 
 var app = builder.Build();
 
