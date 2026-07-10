@@ -18,6 +18,8 @@ public class EventPlan
 
     //test
 
+    //test
+
     public Client Client { get; set; } = null!;
     public ICollection<EventPlanItem> Items { get; set; } = new List<EventPlanItem>();
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
