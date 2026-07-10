@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Planura.Core.Domain.Repositories;
+using Planura.Infrastructure.Persistence.Repositories;
 
 namespace Planura.Infrastructure.Persistence.Extensions;
 
@@ -19,6 +21,9 @@ public static class PersistenceServiceCollectionExtensions
         {
             options.UseSqlServer(connectionString);
         });
+
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
+        services.AddScoped(typeof(IGenericRepository<,>), typeof(GenericRepository<,>));
 
         return services;
     }
