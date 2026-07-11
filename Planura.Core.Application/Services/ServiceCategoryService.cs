@@ -1,4 +1,5 @@
 using AutoMapper;
+using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Entities;
@@ -9,13 +10,17 @@ namespace Planura.Core.Application.Services;
 
 public class ServiceCategoryService : IServiceCategoryService
 {
+    private const string CategoryImagesFolder = "images/categories";
+
     private readonly IUnitOfWork _unitOfWork;
     private readonly IMapper _mapper;
+    private readonly IAttachmentService _attachmentService;
 
-    public ServiceCategoryService(IUnitOfWork unitOfWork, IMapper mapper)
+    public ServiceCategoryService(IUnitOfWork unitOfWork, IMapper mapper, IAttachmentService attachmentService)
     {
         _unitOfWork = unitOfWork;
         _mapper = mapper;
+        _attachmentService = attachmentService;
     }
 
     public async Task<IEnumerable<ServiceCategoryDto>> GetAllAsync(bool activeOnly = false)
@@ -25,7 +30,13 @@ public class ServiceCategoryService : IServiceCategoryService
             ? await repo.GetAllWithSpecAsync(new ActiveServiceCategoriesSpecification())
             : await repo.GetAllAsync();
 
-        return _mapper.Map<IEnumerable<ServiceCategoryDto>>(categories);
+        var dtos = _mapper.Map<IEnumerable<ServiceCategoryDto>>(categories);
+        foreach (var dto in dtos)
+        {
+            dto.IconUrl = _attachmentService.ToAbsoluteUrl(dto.IconUrl);
+        }
+
+        return dtos;
     }
 
     public async Task<ServiceCategoryDto> GetByIdAsync(long id)
@@ -38,7 +49,7 @@ public class ServiceCategoryService : IServiceCategoryService
             throw new NotFoundExeption(nameof(ServiceCategory), id);
         }
 
-        return _mapper.Map<ServiceCategoryDto>(category);
+        return ResolveIconUrl(_mapper.Map<ServiceCategoryDto>(category));
     }
 
     public async Task<ServiceCategoryDto> GetBySlugAsync(string slug)
@@ -51,7 +62,7 @@ public class ServiceCategoryService : IServiceCategoryService
             throw new NotFoundExeption(nameof(ServiceCategory), slug);
         }
 
-        return _mapper.Map<ServiceCategoryDto>(category);
+        return ResolveIconUrl(_mapper.Map<ServiceCategoryDto>(category));
     }
 
     public async Task<ServiceCategoryDto> CreateAsync(CreateServiceCategoryDto dto)
@@ -65,10 +76,15 @@ public class ServiceCategoryService : IServiceCategoryService
         }
 
         var category = _mapper.Map<ServiceCategory>(dto);
+        if (dto.IconFile is not null && dto.IconFile.Length > 0)
+        {
+            category.IconUrl = await _attachmentService.UploadAsynce(dto.IconFile, CategoryImagesFolder);
+        }
+
         await _unitOfWork.Repository<ServiceCategory, long>().AddAsync(category);
         await _unitOfWork.SaveChangesAsync();
 
-        return _mapper.Map<ServiceCategoryDto>(category);
+        return ResolveIconUrl(_mapper.Map<ServiceCategoryDto>(category));
     }
 
     public async Task<ServiceCategoryDto> UpdateAsync(long id, UpdateServiceCategoryDto dto)
@@ -87,11 +103,20 @@ public class ServiceCategoryService : IServiceCategoryService
             throw new BadRequestExeption($"A service category with slug '{dto.Slug}' already exists.");
         }
 
-        _mapper.Map(dto, category);
+        if (dto.IconFile is not null && dto.IconFile.Length > 0)
+        {
+            _attachmentService.Delete(category.IconUrl ?? string.Empty);
+            category.IconUrl = await _attachmentService.UploadAsynce(dto.IconFile, CategoryImagesFolder);
+        }
+
+        category.NameEn = dto.NameEn;
+        category.Slug = dto.Slug;
+        category.IsActive = dto.IsActive;
+
         repo.Update(category);
         await _unitOfWork.SaveChangesAsync();
 
-        return _mapper.Map<ServiceCategoryDto>(category);
+        return ResolveIconUrl(_mapper.Map<ServiceCategoryDto>(category));
     }
 
     public async Task DeleteAsync(long id)
@@ -104,7 +129,14 @@ public class ServiceCategoryService : IServiceCategoryService
             throw new NotFoundExeption(nameof(ServiceCategory), id);
         }
 
+        _attachmentService.Delete(category.IconUrl ?? string.Empty);
         repo.Delete(category);
         await _unitOfWork.SaveChangesAsync();
+    }
+
+    private ServiceCategoryDto ResolveIconUrl(ServiceCategoryDto dto)
+    {
+        dto.IconUrl = _attachmentService.ToAbsoluteUrl(dto.IconUrl);
+        return dto;
     }
 }

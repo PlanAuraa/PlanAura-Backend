@@ -10,4 +10,5 @@ public interface IVendorPackageService
     Task<VendorPackageDto> CreateAsync(CreateVendorPackageDto dto);
     Task<VendorPackageDto> UpdateAsync(long id, UpdateVendorPackageDto dto);
     Task DeleteAsync(long id);
+    Task<IEnumerable<VendorPackageDto>> SearchAsync(VendorPackageSearchDto query);
 }

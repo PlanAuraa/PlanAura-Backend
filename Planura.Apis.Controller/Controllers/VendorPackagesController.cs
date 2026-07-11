@@ -35,6 +35,13 @@ public class VendorPackagesController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("search")]
+    public async Task<ActionResult<IEnumerable<VendorPackageDto>>> Search([FromQuery] VendorPackageSearchDto query)
+    {
+        var result = await _service.SearchAsync(query);
+        return Ok(result);
+    }
+
     [HttpPost]
     public async Task<ActionResult<VendorPackageDto>> Create([FromBody] CreateVendorPackageDto dto)
     {

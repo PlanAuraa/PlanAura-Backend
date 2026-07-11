@@ -35,14 +35,16 @@ public class ServiceCategoriesController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<ServiceCategoryDto>> Create([FromBody] CreateServiceCategoryDto dto)
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<ServiceCategoryDto>> Create([FromForm] CreateServiceCategoryDto dto)
     {
         var created = await _service.CreateAsync(dto);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpPut("{id:long}")]
-    public async Task<ActionResult<ServiceCategoryDto>> Update(long id, [FromBody] UpdateServiceCategoryDto dto)
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<ServiceCategoryDto>> Update(long id, [FromForm] UpdateServiceCategoryDto dto)
     {
         return Ok(await _service.UpdateAsync(id, dto));
     }

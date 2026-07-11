@@ -25,4 +25,8 @@
     <ProjectReference Include="..\Planura.Shared\Planura.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="wwwroot\images\" />
+  </ItemGroup>
+
 </Project>

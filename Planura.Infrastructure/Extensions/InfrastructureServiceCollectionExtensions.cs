@@ -11,6 +11,8 @@ using Planura.Core.Application.Services;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Infrastructure.Authorization;
+using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Infrastructure.AttachementService;
 using Planura.Infrastructure.Options;
 using Planura.Infrastructure.Services;
 
@@ -27,6 +29,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<IAuthorizationHandler, ApprovedVendorHandler>();
+        services.AddScoped<IAttachmentService, AttachmentService>();
 
         services.AddAuthentication(options =>
         {

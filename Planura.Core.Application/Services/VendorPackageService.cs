@@ -97,6 +97,35 @@ public class VendorPackageService : IVendorPackageService
         await _unitOfWork.SaveChangesAsync();
     }
 
+    public Task<IEnumerable<VendorPackageDto>> SearchAsync(VendorPackageSearchDto query)
+    {
+        var queryable = _unitOfWork.Repository<VendorPackage, long>().GetQueryable();
+
+        if (query.ActiveOnly)
+        {
+            queryable = queryable.Where(package => package.IsActive);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Title))
+        {
+            var title = query.Title.Trim().ToLower();
+            queryable = queryable.Where(package => package.Title.ToLower().Contains(title));
+        }
+
+        if (query.CategoryId is not null && query.CategoryId > 0)
+        {
+            var categoryId = query.CategoryId.Value;
+            queryable = queryable.Where(package => package.Vendor.CategoryId == categoryId);
+        }
+
+        var packages = queryable
+            .OrderByDescending(package => package.CreatedAt)
+            .ToList();
+
+        var result = _mapper.Map<IEnumerable<VendorPackageDto>>(packages);
+        return Task.FromResult(result);
+    }
+
     private async Task EnsureVendorExistsAsync(long vendorId)
     {
         var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(vendorId);
