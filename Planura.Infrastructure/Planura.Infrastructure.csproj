@@ -7,6 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.17" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Planura.Core.Application.Abstraction\Planura.Core.Application.Abstraction.csproj" />
     <ProjectReference Include="..\Planura.Core.Application\Planura.Core.Application.csproj" />
     <ProjectReference Include="..\Planura.Core.Domain\Planura.Core.Domain.csproj" />

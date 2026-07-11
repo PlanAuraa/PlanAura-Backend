@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore.Storage;
 using Planura.Core.Domain.Repositories;
 
 namespace Planura.Infrastructure.Persistence.Repositories;
@@ -10,6 +11,7 @@ public class UnitOfWork : IUnitOfWork
 {
     private readonly PlanuraDbContext _dbContext;
     private Hashtable? _repositories;
+    private IDbContextTransaction? _currentTransaction;
 
     public UnitOfWork(PlanuraDbContext dbContext)
     {
@@ -36,6 +38,53 @@ public class UnitOfWork : IUnitOfWork
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         return await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction is not null)
+        {
+            return;
+        }
+
+        _currentTransaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+    }
+
+    public async Task CommitTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await _currentTransaction.CommitAsync(cancellationToken);
+        }
+        finally
+        {
+            await _currentTransaction.DisposeAsync();
+            _currentTransaction = null;
+        }
+    }
+
+    public async Task RollbackTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _currentTransaction.RollbackAsync(cancellationToken);
+        }
+        finally
+        {
+            await _currentTransaction.DisposeAsync();
+            _currentTransaction = null;
+        }
     }
 
     public void Dispose()
