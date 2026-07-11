@@ -7,10 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Needed for IHttpContextAccessor (CurrentUserService) — this is a plain class library
-         (Microsoft.NET.Sdk), so ASP.NET Core shared-framework types require an explicit
-         FrameworkReference rather than being implicitly available as in a Sdk.Web project. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.17" />
   </ItemGroup>
 
   <ItemGroup>

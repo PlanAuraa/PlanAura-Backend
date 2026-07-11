@@ -9,6 +9,8 @@ public static class ApplicationServiceCollectionExtensions
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
         services.AddAutoMapper(Assembly.GetExecutingAssembly());
+        services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IAccountAdminService, AccountAdminService>();
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
         services.AddScoped<IVendorPackageService, VendorPackageService>();
         services.AddScoped<IVendorAvailabilityService, VendorAvailabilityService>();

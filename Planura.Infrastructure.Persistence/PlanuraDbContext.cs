@@ -50,7 +50,7 @@ public class PlanuraDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
         builder.Entity<IdentityUserLogin<long>>().ToTable("user_logins");
         builder.Entity<IdentityUserToken<long>>().ToTable("user_tokens");
         builder.Entity<IdentityRoleClaim<long>>().ToTable("role_claims");
-
+        //
         builder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(user => user.FullName).HasMaxLength(150).IsRequired();

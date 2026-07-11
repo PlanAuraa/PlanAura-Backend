@@ -9,7 +9,9 @@ namespace EventManagment.Apis.Controller.Controllers.Common
     [ApiExplorerSettings(IgnoreApi = false)]
     public class ErrorsController : ControllerBase
     {
-        [HttpGet]
+        // Responds to every verb: UseStatusCodePagesWithReExecute re-executes the original request
+        // (which may be POST/PUT/DELETE) against this route, so restricting to GET would yield a 405.
+        [AcceptVerbs("GET", "POST", "PUT", "PATCH", "DELETE")]
         public IActionResult Error(int Code)
         {
             if (Code == (int)HttpStatusCode.NotFound)
@@ -19,7 +21,7 @@ namespace EventManagment.Apis.Controller.Controllers.Common
             }
             else if (Code == (int)HttpStatusCode.Forbidden)
             {
-                var respnse = new ApiResponse((int)HttpStatusCode.Forbidden, $"You are forbidden from accessing this resource.");
+                var respnse = new ApiResponse((int)HttpStatusCode.Forbidden, $"You Are Not Authorized");
                 return StatusCode((int)HttpStatusCode.Forbidden, respnse);
 
             }

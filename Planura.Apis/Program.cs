@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
+using Planura.Infrastructure.Extensions;
 using Planura.Infrastructure.Persistence.Extensions;
+using Planura.Infrastructure.Persistence.Seed;
 using Planura.Shared.Errors.Response;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,11 +26,39 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
 }).AddApplicationPart(typeof(AssemblyInformation).Assembly);
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Description = "Enter a JWT access token (no \"Bearer \" prefix needed).",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 builder.Services.AddPersistence(builder.Configuration);
 builder.Services.AddApplicationServices();
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    await IdentityDataSeeder.SeedAsync(scope.ServiceProvider);
+}
 
 
 app.UseMiddleware<ExeptionHandlerMiddleware>();
