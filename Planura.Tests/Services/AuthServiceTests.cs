@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Moq;
+using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
 using Planura.Core.Domain.Entities;
