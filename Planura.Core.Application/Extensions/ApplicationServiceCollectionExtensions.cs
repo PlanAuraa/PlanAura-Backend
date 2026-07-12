@@ -14,6 +14,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
         services.AddScoped<IVendorPackageService, VendorPackageService>();
         services.AddScoped<IVendorAvailabilityService, VendorAvailabilityService>();
+        services.AddScoped<IVendorVerificationService, VendorVerificationService>();
+        services.AddScoped<IVendorService, VendorService>();
+        services.AddScoped<INotificationService, NotificationService>();
         return services;
     }
 }

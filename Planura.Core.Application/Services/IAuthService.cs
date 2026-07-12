@@ -5,6 +5,7 @@ namespace Planura.Core.Application.Services;
 public interface IAuthService
 {
     Task<AuthResponseDto> RegisterClientAsync(RegisterClientDto dto);
+    Task<AuthResponseDto> RegisterVendorAsync(RegisterVendorDto dto);
     Task<AuthResponseDto> LoginAsync(LoginDto dto);
     Task<CurrentUserDto> GetCurrentUserAsync();
 }

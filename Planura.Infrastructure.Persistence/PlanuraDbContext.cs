@@ -18,6 +18,7 @@ public class PlanuraDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     public DbSet<ServiceCategory> ServiceCategories => Set<ServiceCategory>();
     public DbSet<VendorVerification> VendorVerifications => Set<VendorVerification>();
     public DbSet<VendorVerificationHistory> VendorVerificationHistory => Set<VendorVerificationHistory>();
+    public DbSet<VendorVerificationDocument> VendorVerificationDocuments { get; set; }
     public DbSet<VendorPackage> VendorPackages => Set<VendorPackage>();
     public DbSet<VendorAvailability> VendorAvailability => Set<VendorAvailability>();
     public DbSet<EventPlan> EventPlans => Set<EventPlan>();

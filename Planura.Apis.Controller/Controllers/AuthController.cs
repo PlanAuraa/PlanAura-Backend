@@ -30,10 +30,21 @@ public class AuthController : ControllerBase
         return Ok(await _authService.LoginAsync(dto));
     }
 
+    
     [Authorize]
     [HttpGet("me")]
     public async Task<ActionResult<CurrentUserDto>> Me()
     {
         return Ok(await _authService.GetCurrentUserAsync());
+    }
+
+
+    // vendor
+    [AllowAnonymous]
+    [HttpPost("register/vendor")]
+    public async Task<ActionResult<AuthResponseDto>> RegisterVendor(
+    [FromForm] RegisterVendorDto dto)
+    {
+        return Ok(await _authService.RegisterVendorAsync(dto));
     }
 }
