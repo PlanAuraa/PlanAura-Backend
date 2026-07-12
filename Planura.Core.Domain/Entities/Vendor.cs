@@ -1,3 +1,5 @@
+using Planura.Core.Domain.Enums;
+
 namespace Planura.Core.Domain.Entities;
 
 public class Vendor
@@ -17,6 +19,7 @@ public class Vendor
     public decimal AvgRating { get; set; }
     public int TotalReviews { get; set; }
     public int TotalCompletedBookings { get; set; }
+    public VendorType VendorType { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 

@@ -9,10 +9,10 @@ public class VendorVerificationConfiguration : IEntityTypeConfiguration<VendorVe
     public void Configure(EntityTypeBuilder<VendorVerification> builder)
     {
         builder.Property(verification => verification.Status).HasMaxLength(20).IsRequired();
-        builder.Property(verification => verification.CommercialDocUrl).HasMaxLength(500);
-        builder.Property(verification => verification.NationalIdDocUrl).HasMaxLength(500);
         builder.Property(verification => verification.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(verification => verification.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
+        builder.Property(verification => verification.IsCurrent)
+    .HasDefaultValue(true);
 
         builder.HasOne(verification => verification.Vendor)
             .WithMany(vendor => vendor.Verifications)

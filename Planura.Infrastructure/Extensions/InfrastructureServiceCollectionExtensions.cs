@@ -30,7 +30,6 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<IAuthorizationHandler, ApprovedVendorHandler>();
         services.AddScoped<IAttachmentService, AttachmentService>();
-
         services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
