@@ -10,6 +10,7 @@ public class VendorAvailability
     public DateTimeOffset EndAt { get; set; }
     public AvailabilityStatus Status { get; set; } = AvailabilityStatus.Available;
     public long? BookingRequestId { get; set; }
+    public DateTimeOffset? HoldExpiresAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public byte[] RowVersion { get; set; } = null!;

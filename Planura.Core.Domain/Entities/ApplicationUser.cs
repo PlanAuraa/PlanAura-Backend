@@ -16,5 +16,7 @@ public class ApplicationUser : IdentityUser<long>
     public ICollection<VendorVerification> ReviewedVendorVerifications { get; set; } = new List<VendorVerification>();
     public ICollection<VendorVerificationHistory> VendorVerificationChanges { get; set; } = new List<VendorVerificationHistory>();
     public ICollection<BookingStatusHistory> BookingStatusChanges { get; set; } = new List<BookingStatusHistory>();
+    public ICollection<BookingRequest> DisputedBookingRequests { get; set; } = new List<BookingRequest>();
+    public ICollection<BookingRequest> ResolvedBookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
 }

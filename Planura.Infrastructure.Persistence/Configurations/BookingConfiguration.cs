@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Planura.Core.Domain.Entities;
+using Planura.Core.Domain.Enums;
 
 namespace Planura.Infrastructure.Persistence.Configurations;
 
@@ -9,7 +10,19 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
     public void Configure(EntityTypeBuilder<BookingRequest> builder)
     {
         builder.Property(booking => booking.AgreedPrice).HasPrecision(12, 2);
-        builder.Property(booking => booking.Status).HasMaxLength(20).HasDefaultValue("pending").IsRequired();
+        builder.Property(booking => booking.Status)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .HasDefaultValue(BookingStatus.Pending)
+            .IsRequired();
+        builder.Property(booking => booking.PaymentStatus)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .HasDefaultValue(BookingPaymentStatus.Unpaid)
+            .IsRequired();
+        builder.Property(booking => booking.DisputeStatus)
+            .HasConversion<string>()
+            .HasMaxLength(20);
         builder.Property(booking => booking.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(booking => booking.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
 
@@ -35,6 +48,16 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
         builder.HasOne(booking => booking.VendorPackage)
             .WithMany(package => package.BookingRequests)
             .HasForeignKey(booking => booking.VendorPackageId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(booking => booking.DisputedByUser)
+            .WithMany(user => user.DisputedBookingRequests)
+            .HasForeignKey(booking => booking.DisputedByUserId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(booking => booking.ResolvedByAdmin)
+            .WithMany(user => user.ResolvedBookingRequests)
+            .HasForeignKey(booking => booking.ResolvedByAdminId)
             .OnDelete(DeleteBehavior.SetNull);
     }
 }

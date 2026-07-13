@@ -25,6 +25,7 @@ public class PlanuraDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     public DbSet<EventPlanItem> EventPlanItems => Set<EventPlanItem>();
     public DbSet<BookingRequest> BookingRequests => Set<BookingRequest>();
     public DbSet<BookingStatusHistory> BookingStatusHistory => Set<BookingStatusHistory>();
+    public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<ReviewResponse> ReviewResponses => Set<ReviewResponse>();
     public DbSet<AiEventVisualization> AiEventVisualizations => Set<AiEventVisualization>();

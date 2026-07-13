@@ -4,5 +4,6 @@ public enum AvailabilityStatus
 {
     Available = 1,
     Booked = 2,
-    Blocked = 3
+    Blocked = 3,
+    Held = 4
 }

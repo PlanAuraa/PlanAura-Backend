@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Planura.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    partial class PlanuraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260713080157_AddBookingPaymentAndSlotHolds")]
+    partial class AddBookingPaymentAndSlotHolds
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
