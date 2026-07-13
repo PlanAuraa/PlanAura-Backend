@@ -222,6 +222,121 @@ public class BookingServiceTests
     }
 
     [Fact]
+    public async Task CreateBookingRequestAsync_GuestCountExceedsPackageMaxGuests_ThrowsBadRequestWithClearMessage()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
+        packageRepo.Setup(r => r.GetAsync(99))
+            .ReturnsAsync(new VendorPackage { Id = 99, VendorId = VendorId, Title = "Gold", BasePrice = 5000m, MaxGuests = 100 });
+
+        var service = CreateService();
+        var dto = new CreateBookingRequestDto
+        {
+            EventPlanId = EventPlanId,
+            AvailabilityId = AvailabilityId,
+            VendorPackageId = 99,
+            GuestCount = 101
+        };
+
+        var ex = await Assert.ThrowsAsync<BadRequestExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+        Assert.Equal("Guest count exceeds the package maximum of 100 guests.", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_GuestCountAtPackageMaxGuests_Succeeds()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
+        packageRepo.Setup(r => r.GetAsync(99))
+            .ReturnsAsync(new VendorPackage { Id = 99, VendorId = VendorId, Title = "Gold", BasePrice = 5000m, MaxGuests = 100 });
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        BookingRequest? capturedBooking = null;
+        bookingRepo.Setup(r => r.AddAsync(It.IsAny<BookingRequest>()))
+            .Callback<BookingRequest>(b => capturedBooking = b)
+            .Returns(Task.CompletedTask);
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var service = CreateService();
+        var dto = new CreateBookingRequestDto
+        {
+            EventPlanId = EventPlanId,
+            AvailabilityId = AvailabilityId,
+            VendorPackageId = 99,
+            GuestCount = 100
+        };
+
+        await service.CreateBookingRequestAsync(ClientUserId, dto);
+
+        Assert.NotNull(capturedBooking);
+        Assert.Equal(100, capturedBooking!.GuestCount);
+        Assert.Equal(5000m, capturedBooking.AgreedPrice);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_PackageHasNoMaxGuestsCap_AllowsAnyGuestCount()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
+        packageRepo.Setup(r => r.GetAsync(99))
+            .ReturnsAsync(new VendorPackage { Id = 99, VendorId = VendorId, Title = "Custom", BasePrice = 5000m, MaxGuests = null });
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        BookingRequest? capturedBooking = null;
+        bookingRepo.Setup(r => r.AddAsync(It.IsAny<BookingRequest>()))
+            .Callback<BookingRequest>(b => capturedBooking = b)
+            .Returns(Task.CompletedTask);
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var service = CreateService();
+        var dto = new CreateBookingRequestDto
+        {
+            EventPlanId = EventPlanId,
+            AvailabilityId = AvailabilityId,
+            VendorPackageId = 99,
+            GuestCount = 100_000
+        };
+
+        await service.CreateBookingRequestAsync(ClientUserId, dto);
+
+        Assert.NotNull(capturedBooking);
+        Assert.Equal(100_000, capturedBooking!.GuestCount);
+        Assert.Equal(5000m, capturedBooking.AgreedPrice);
+    }
+
+    [Fact]
     public async Task CreateBookingRequestAsync_Valid_CreatesBookingHoldsSlotAndWritesHistory()
     {
         SetupClientRepo(CreateClient());

@@ -71,6 +71,7 @@ public class BookingService : IBookingService
             throw new BadRequestExeption("This vendor is not currently active.");
         }
 
+        decimal? agreedPrice = null;
         if (dto.VendorPackageId is not null)
         {
             var package = await _unitOfWork.Repository<VendorPackage, long>().GetAsync(dto.VendorPackageId.Value);
@@ -78,6 +79,14 @@ public class BookingService : IBookingService
             {
                 throw new NotFoundExeption(nameof(VendorPackage), dto.VendorPackageId.Value);
             }
+
+            if (package.MaxGuests is not null && dto.GuestCount is not null && dto.GuestCount > package.MaxGuests)
+            {
+                throw new BadRequestExeption(
+                    $"Guest count exceeds the package maximum of {package.MaxGuests} guests.");
+            }
+
+            agreedPrice = package.BasePrice;
         }
 
         var booking = new BookingRequest
@@ -88,7 +97,7 @@ public class BookingService : IBookingService
             VendorPackageId = dto.VendorPackageId,
             EventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime),
             GuestCount = dto.GuestCount,
-            AgreedPrice = dto.AgreedPrice,
+            AgreedPrice = agreedPrice,
             ClientMessage = dto.ClientMessage,
             Status = BookingStatus.Pending,
             PaymentStatus = BookingPaymentStatus.Unpaid
