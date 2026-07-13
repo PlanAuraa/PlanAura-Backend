@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
@@ -6,6 +7,7 @@ namespace Planura.Apis.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class ServiceCategoriesController : ControllerBase
 {
     private readonly IServiceCategoryService _service;
