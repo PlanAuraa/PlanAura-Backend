@@ -11,4 +11,6 @@ public static class NotificationTypes
     public const string VendorApproved = "vendor_approved";
     public const string VendorRejected = "vendor_rejected";
     public const string VendorResubmitted = "vendor_resubmitted";
+    public const string BookingRequestReceived = "booking_request_received";
+    public const string BookingCancelled = "booking_cancelled";
 }

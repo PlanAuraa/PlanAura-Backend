@@ -61,6 +61,14 @@ namespace Planura.Apis.MiddleWares
                         await httpContext.Response.WriteAsync(response.ToString());
                         break;
 
+                    case SlotUnavailableExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.Conflict;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.Conflict, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
                     case ValidationExeption validationExeption:
 
                         httpContext.Response.StatusCode = (int)HttpStatusCode.BadRequest;
