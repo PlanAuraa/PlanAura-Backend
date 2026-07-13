@@ -21,6 +21,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IVendorService, VendorService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IBookingService, BookingService>();
+        services.AddScoped<IEventPlanService, EventPlanService>();
         return services;
     }
 }

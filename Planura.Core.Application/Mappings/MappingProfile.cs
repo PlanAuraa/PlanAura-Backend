@@ -19,5 +19,7 @@ public class MappingProfile : Profile
         CreateMap<VendorAvailability, VendorAvailabilityDto>();
 
         CreateMap<BookingRequest, BookingRequestDto>();
+
+        CreateMap<EventPlan, EventPlanDto>();
     }
 }
