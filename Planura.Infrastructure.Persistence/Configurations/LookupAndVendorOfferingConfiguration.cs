@@ -56,7 +56,7 @@ public class VendorAvailabilityConfiguration : IEntityTypeConfiguration<VendorAv
 
         builder.HasIndex(availability => new { availability.VendorId, availability.StartAt })
             .IsUnique()
-            .HasFilter("([status] = 'Held' OR [status] = 'Booked')")
+            .HasFilter("([status] IN ('Held', 'Booked'))")
             .HasDatabaseName("idx_vendor_availability_no_double_hold");
 
         builder.HasOne(availability => availability.Vendor)

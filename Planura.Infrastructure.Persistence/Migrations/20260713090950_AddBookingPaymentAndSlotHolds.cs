@@ -124,7 +124,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                 table: "vendor_availability",
                 columns: new[] { "vendor_id", "start_at" },
                 unique: true,
-                filter: "([status] = 'Held' OR [status] = 'Booked')");
+                filter: "([status] IN ('Held', 'Booked'))");
 
             migrationBuilder.CreateIndex(
                 name: "ix_booking_requests_disputed_by_user_id",
@@ -162,7 +162,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                 column: "disputed_by_user_id",
                 principalTable: "users",
                 principalColumn: "id",
-                onDelete: ReferentialAction.SetNull);
+                onDelete: ReferentialAction.Restrict);
 
             migrationBuilder.AddForeignKey(
                 name: "fk_booking_requests_users_resolved_by_admin_id",
@@ -170,7 +170,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                 column: "resolved_by_admin_id",
                 principalTable: "users",
                 principalColumn: "id",
-                onDelete: ReferentialAction.SetNull);
+                onDelete: ReferentialAction.Restrict);
         }
 
         /// <inheritdoc />

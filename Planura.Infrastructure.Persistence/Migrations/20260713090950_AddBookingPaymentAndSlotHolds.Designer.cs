@@ -12,7 +12,7 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    [Migration("20260713080157_AddBookingPaymentAndSlotHolds")]
+    [Migration("20260713090950_AddBookingPaymentAndSlotHolds")]
     partial class AddBookingPaymentAndSlotHolds
     {
         /// <inheritdoc />
@@ -1324,7 +1324,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.HasIndex("VendorId", "StartAt")
                         .IsUnique()
                         .HasDatabaseName("idx_vendor_availability_no_double_hold")
-                        .HasFilter("([status] = 'Held' OR [status] = 'Booked')");
+                        .HasFilter("([status] IN ('Held', 'Booked'))");
 
                     b.ToTable("vendor_availability");
                 });
@@ -1664,7 +1664,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.HasOne("Planura.Core.Domain.Entities.ApplicationUser", "DisputedByUser")
                         .WithMany("DisputedBookingRequests")
                         .HasForeignKey("DisputedByUserId")
-                        .OnDelete(DeleteBehavior.SetNull)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_booking_requests_users_disputed_by_user_id");
 
                     b.HasOne("Planura.Core.Domain.Entities.EventPlan", "EventPlan")
@@ -1677,7 +1677,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.HasOne("Planura.Core.Domain.Entities.ApplicationUser", "ResolvedByAdmin")
                         .WithMany("ResolvedBookingRequests")
                         .HasForeignKey("ResolvedByAdminId")
-                        .OnDelete(DeleteBehavior.SetNull)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_booking_requests_users_resolved_by_admin_id");
 
                     b.HasOne("Planura.Core.Domain.Entities.Vendor", "Vendor")

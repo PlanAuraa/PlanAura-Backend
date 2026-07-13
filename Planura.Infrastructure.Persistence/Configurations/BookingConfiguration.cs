@@ -50,15 +50,18 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
             .HasForeignKey(booking => booking.VendorPackageId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // Restrict (not SetNull): two cascading FKs from this table to Users would trigger
+        // SQL Server error 1785 ("multiple cascade paths"). ApplicationUser rows are never
+        // hard-deleted in this app (suspension flips IsActive), so Restrict is safe here.
         builder.HasOne(booking => booking.DisputedByUser)
             .WithMany(user => user.DisputedBookingRequests)
             .HasForeignKey(booking => booking.DisputedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(booking => booking.ResolvedByAdmin)
             .WithMany(user => user.ResolvedBookingRequests)
             .HasForeignKey(booking => booking.ResolvedByAdminId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
