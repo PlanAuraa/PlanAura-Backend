@@ -1,8 +1,10 @@
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
+using Planura.Core.Application.Services;
 using Planura.Infrastructure.Extensions;
 using Planura.Infrastructure.Persistence.Extensions;
 using Planura.Infrastructure.Persistence.Seed;
@@ -53,11 +55,38 @@ builder.Services.AddPersistence(builder.Configuration);
 builder.Services.AddApplicationServices(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
 
+builder.Services.AddHangfire(config => config
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddHangfireServer();
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
     await IdentityDataSeeder.SeedAsync(scope.ServiceProvider);
+}
+
+using (var scope = app.Services.CreateScope())
+{
+    var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+
+    recurringJobs.AddOrUpdate<IBookingHoldExpiryJob>(
+        "booking-hold-expiry",
+        job => job.RunAsync(),
+        "*/15 * * * *");
+
+    recurringJobs.AddOrUpdate<IPaymentDeadlineJob>(
+        "payment-deadline",
+        job => job.RunAsync(),
+        "*/15 * * * *");
+
+    recurringJobs.AddOrUpdate<IPaymentReminderJob>(
+        "payment-reminder",
+        job => job.RunAsync(),
+        "*/15 * * * *");
 }
 
 

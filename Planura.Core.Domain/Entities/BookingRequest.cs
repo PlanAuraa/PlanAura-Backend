@@ -19,6 +19,7 @@ public class BookingRequest
     public DateTimeOffset? RespondedAt { get; set; }
     public DateTimeOffset? CancelledAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public DateTimeOffset? PaymentReminderSentAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 

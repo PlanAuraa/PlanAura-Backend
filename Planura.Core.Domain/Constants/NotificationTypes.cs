@@ -16,4 +16,7 @@ public static class NotificationTypes
     public const string PaymentSuccessful = "payment_successful";
     public const string PaymentReceived = "payment_received";
     public const string PaymentFailed = "payment_failed";
+    public const string BookingRequestExpired = "booking_request_expired";
+    public const string BookingAutoCancelledUnpaid = "booking_auto_cancelled_unpaid";
+    public const string PaymentDeadlineApproaching = "payment_deadline_approaching";
 }
