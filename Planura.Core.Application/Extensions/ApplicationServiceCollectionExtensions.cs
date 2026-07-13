@@ -12,6 +12,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddAutoMapper(cfg => { }, Assembly.GetExecutingAssembly());
         services.Configure<BookingOptions>(configuration.GetSection(BookingOptions.SectionName));
+        services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IAccountAdminService, AccountAdminService>();
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
@@ -22,6 +23,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<IEventPlanService, EventPlanService>();
+        services.AddScoped<IPaymentService, PaymentService>();
         return services;
     }
 }

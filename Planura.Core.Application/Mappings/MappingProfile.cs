@@ -21,5 +21,7 @@ public class MappingProfile : Profile
         CreateMap<BookingRequest, BookingRequestDto>();
 
         CreateMap<EventPlan, EventPlanDto>();
+
+        CreateMap<Payment, PaymentDto>();
     }
 }

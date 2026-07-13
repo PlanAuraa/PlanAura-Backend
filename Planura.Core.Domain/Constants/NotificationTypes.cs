@@ -13,4 +13,7 @@ public static class NotificationTypes
     public const string VendorResubmitted = "vendor_resubmitted";
     public const string BookingRequestReceived = "booking_request_received";
     public const string BookingCancelled = "booking_cancelled";
+    public const string PaymentSuccessful = "payment_successful";
+    public const string PaymentReceived = "payment_received";
+    public const string PaymentFailed = "payment_failed";
 }
