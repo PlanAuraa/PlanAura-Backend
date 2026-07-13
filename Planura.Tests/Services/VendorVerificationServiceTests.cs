@@ -1,4 +1,5 @@
 using Moq;
+using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models.VendorVerification;
 using Planura.Core.Application.Services;
 using Planura.Core.Domain.Constants;
@@ -20,9 +21,8 @@ public class VendorVerificationServiceTests
 
     private VendorVerificationService CreateService() => new(
         _unitOfWorkMock.Object,
-        _currentUserServiceMock.Object,
-        _attachmentServiceMock.Object,
-        _notificationServiceMock.Object);
+    _currentUserServiceMock.Object,
+    _attachmentServiceMock.Object);
 
     private static Vendor CreateVendor(long id = 1, VendorType type = VendorType.Individual) => new()
     {
