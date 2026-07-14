@@ -26,6 +26,17 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
         return new BadRequestObjectResult(new ApiValidationErrorResponse() { Erroes = errors });
     };
 }).AddApplicationPart(typeof(AssemblyInformation).Assembly);
+
+builder.Services.AddCors(corsOptions =>
+{
+    corsOptions.AddPolicy("TalabatPolicy", policyBuilder =>
+    {
+        policyBuilder.AllowAnyHeader()
+                     .AllowAnyMethod()
+                     .AllowAnyOrigin(); // Allow all domains
+    });
+});
+
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen(options =>
@@ -106,6 +117,8 @@ app.UseHttpsRedirection();
 app.UseStatusCodePagesWithReExecute("/Errors/{0}");
 
 app.UseStaticFiles();
+app.UseCors("TalabatPolicy");
+
 
 app.UseAuthentication();
 app.UseAuthorization();

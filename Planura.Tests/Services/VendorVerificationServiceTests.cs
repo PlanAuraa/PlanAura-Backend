@@ -17,12 +17,11 @@ public class VendorVerificationServiceTests
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<ICurrentUserService> _currentUserServiceMock = new();
     private readonly Mock<IAttachmentService> _attachmentServiceMock = new();
-    private readonly Mock<INotificationService> _notificationServiceMock = new();
 
     private VendorVerificationService CreateService() => new(
-        _unitOfWorkMock.Object,
-    _currentUserServiceMock.Object,
-    _attachmentServiceMock.Object);
+         _unitOfWorkMock.Object,
+         _currentUserServiceMock.Object,
+         _attachmentServiceMock.Object);
 
     private static Vendor CreateVendor(long id = 1, VendorType type = VendorType.Individual) => new()
     {
