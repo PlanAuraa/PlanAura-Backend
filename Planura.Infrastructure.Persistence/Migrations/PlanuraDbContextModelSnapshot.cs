@@ -427,6 +427,19 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("GETUTCDATE()");
 
+                    b.Property<string>("DisputeStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("dispute_status");
+
+                    b.Property<DateTimeOffset?>("DisputedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("disputed_at");
+
+                    b.Property<long?>("DisputedByUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("disputed_by_user_id");
+
                     b.Property<DateOnly>("EventDate")
                         .HasColumnType("date")
                         .HasColumnName("event_date");
@@ -439,6 +452,30 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnType("int")
                         .HasColumnName("guest_count");
 
+                    b.Property<DateTimeOffset?>("PaymentReminderSentAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("payment_reminder_sent_at");
+
+                    b.Property<string>("PaymentStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Unpaid")
+                        .HasColumnName("payment_status");
+
+                    b.Property<string>("ResolutionNotes")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("resolution_notes");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<long?>("ResolvedByAdminId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("resolved_by_admin_id");
+
                     b.Property<DateTimeOffset?>("RespondedAt")
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("responded_at");
@@ -448,7 +485,7 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("pending")
+                        .HasDefaultValue("Pending")
                         .HasColumnName("status");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
@@ -475,8 +512,14 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.HasIndex("ClientId")
                         .HasDatabaseName("ix_booking_requests_client_id");
 
+                    b.HasIndex("DisputedByUserId")
+                        .HasDatabaseName("ix_booking_requests_disputed_by_user_id");
+
                     b.HasIndex("EventPlanId")
                         .HasDatabaseName("ix_booking_requests_event_plan_id");
+
+                    b.HasIndex("ResolvedByAdminId")
+                        .HasDatabaseName("ix_booking_requests_resolved_by_admin_id");
 
                     b.HasIndex("Status")
                         .HasDatabaseName("ix_booking_requests_status");
@@ -763,6 +806,84 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_notifications_user_id");
 
                     b.ToTable("notifications");
+                });
+
+            modelBuilder.Entity("Planura.Core.Domain.Entities.Payment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("decimal(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<long>("BookingRequestId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("booking_request_id");
+
+                    b.Property<long>("ClientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("client_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("GETUTCDATE()");
+
+                    b.Property<string>("GatewayReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("gateway_reference");
+
+                    b.Property<DateTimeOffset?>("PaidAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("paid_at");
+
+                    b.Property<string>("PaymentMethod")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("payment_method");
+
+                    b.Property<string>("RefundReason")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("refund_reason");
+
+                    b.Property<DateTimeOffset?>("RefundedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("refunded_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("VendorId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_payments");
+
+                    b.HasIndex("BookingRequestId")
+                        .HasDatabaseName("ix_payments_booking_request_id");
+
+                    b.HasIndex("ClientId")
+                        .HasDatabaseName("ix_payments_client_id");
+
+                    b.HasIndex("GatewayReference")
+                        .HasDatabaseName("ix_payments_gateway_reference");
+
+                    b.HasIndex("VendorId")
+                        .HasDatabaseName("ix_payments_vendor_id");
+
+                    b.ToTable("payments");
                 });
 
             modelBuilder.Entity("Planura.Core.Domain.Entities.PortfolioLink", b =>
@@ -1170,6 +1291,10 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("end_at");
 
+                    b.Property<DateTimeOffset?>("HoldExpiresAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("hold_expires_at");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
@@ -1198,7 +1323,9 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_vendor_availability_booking_request_id");
 
                     b.HasIndex("VendorId", "StartAt")
-                        .HasDatabaseName("ix_vendor_availability_vendor_id_start_at");
+                        .IsUnique()
+                        .HasDatabaseName("idx_vendor_availability_no_double_hold")
+                        .HasFilter("([status] IN ('Held', 'Booked'))");
 
                     b.ToTable("vendor_availability");
                 });
@@ -1535,12 +1662,24 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_booking_requests_clients_client_id");
 
+                    b.HasOne("Planura.Core.Domain.Entities.ApplicationUser", "DisputedByUser")
+                        .WithMany("DisputedBookingRequests")
+                        .HasForeignKey("DisputedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_booking_requests_users_disputed_by_user_id");
+
                     b.HasOne("Planura.Core.Domain.Entities.EventPlan", "EventPlan")
                         .WithMany("BookingRequests")
                         .HasForeignKey("EventPlanId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_booking_requests_event_plans_event_plan_id");
+
+                    b.HasOne("Planura.Core.Domain.Entities.ApplicationUser", "ResolvedByAdmin")
+                        .WithMany("ResolvedBookingRequests")
+                        .HasForeignKey("ResolvedByAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_booking_requests_users_resolved_by_admin_id");
 
                     b.HasOne("Planura.Core.Domain.Entities.Vendor", "Vendor")
                         .WithMany("BookingRequests")
@@ -1557,7 +1696,11 @@ namespace Planura.Infrastructure.Persistence.Migrations
 
                     b.Navigation("Client");
 
+                    b.Navigation("DisputedByUser");
+
                     b.Navigation("EventPlan");
+
+                    b.Navigation("ResolvedByAdmin");
 
                     b.Navigation("Vendor");
 
@@ -1647,6 +1790,36 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_notifications_users_user_id");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Planura.Core.Domain.Entities.Payment", b =>
+                {
+                    b.HasOne("Planura.Core.Domain.Entities.BookingRequest", "BookingRequest")
+                        .WithMany("Payments")
+                        .HasForeignKey("BookingRequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_payments_booking_requests_booking_request_id");
+
+                    b.HasOne("Planura.Core.Domain.Entities.Client", "Client")
+                        .WithMany()
+                        .HasForeignKey("ClientId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_payments_clients_client_id");
+
+                    b.HasOne("Planura.Core.Domain.Entities.Vendor", "Vendor")
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_payments_vendors_vendor_id");
+
+                    b.Navigation("BookingRequest");
+
+                    b.Navigation("Client");
+
+                    b.Navigation("Vendor");
                 });
 
             modelBuilder.Entity("Planura.Core.Domain.Entities.PortfolioLink", b =>
@@ -1834,7 +2007,11 @@ namespace Planura.Infrastructure.Persistence.Migrations
 
                     b.Navigation("Client");
 
+                    b.Navigation("DisputedBookingRequests");
+
                     b.Navigation("Notifications");
+
+                    b.Navigation("ResolvedBookingRequests");
 
                     b.Navigation("ReviewedVendorVerifications");
 
@@ -1845,6 +2022,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Planura.Core.Domain.Entities.BookingRequest", b =>
                 {
+                    b.Navigation("Payments");
+
                     b.Navigation("Review");
 
                     b.Navigation("StatusHistory");
