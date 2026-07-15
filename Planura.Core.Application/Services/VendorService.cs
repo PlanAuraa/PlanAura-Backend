@@ -1,6 +1,8 @@
 using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Models;
 using Planura.Core.Application.Models.Vendor;
 using Planura.Core.Application.Specifications.Vendor;
+using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
@@ -86,6 +88,86 @@ public class VendorService : IVendorService
 
         // Re-fetch so the returned DTO reflects the (possibly changed) category join correctly.
         return await GetByIdAsync(vendorId);
+    }
+
+    public Task<PagedResult<VendorListItemDto>> BrowseVendorsAsync(VendorBrowseFilterDto filter)
+    {
+        var page = filter.Page < 1 ? 1 : filter.Page;
+        var pageSize = filter.PageSize is < 1 or > 50 ? 12 : filter.PageSize;
+
+        var queryable = _unitOfWork.Repository<Vendor, long>().GetQueryable()
+            .Where(vendor => vendor.VerificationStatus == VerificationStatus.Verified
+                || vendor.VerificationStatus == VerificationStatus.Trusted);
+
+        if (!string.IsNullOrWhiteSpace(filter.Category))
+        {
+            var category = filter.Category.Trim();
+            queryable = long.TryParse(category, out var categoryId)
+                ? queryable.Where(vendor => vendor.CategoryId == categoryId)
+                : queryable.Where(vendor => vendor.Category != null && vendor.Category.Slug == category);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.City))
+        {
+            var city = filter.City.Trim().ToLower();
+            queryable = queryable.Where(vendor => vendor.City != null && vendor.City.ToLower().Contains(city));
+        }
+
+        if (filter.MinRating is not null)
+        {
+            queryable = queryable.Where(vendor => vendor.AvgRating >= filter.MinRating.Value);
+        }
+
+        var projected = queryable.Select(vendor => new VendorBrowseRow
+        {
+            Id = vendor.Id,
+            BusinessName = vendor.BusinessName,
+            BusinessDescription = vendor.BusinessDescription,
+            LogoUrl = vendor.LogoUrl,
+            CategoryName = vendor.Category != null ? vendor.Category.NameEn : null,
+            City = vendor.City,
+            AvgRating = vendor.AvgRating,
+            TotalReviews = vendor.TotalReviews,
+            VerificationStatus = vendor.VerificationStatus,
+            StartingPrice = vendor.Packages.Where(p => p.IsActive).Select(p => (decimal?)p.BasePrice).Min()
+        });
+
+        if (filter.MinPrice is not null)
+        {
+            projected = projected.Where(row => row.StartingPrice != null && row.StartingPrice >= filter.MinPrice.Value);
+        }
+
+        if (filter.MaxPrice is not null)
+        {
+            projected = projected.Where(row => row.StartingPrice != null && row.StartingPrice <= filter.MaxPrice.Value);
+        }
+
+        var totalCount = projected.Count();
+
+        projected = filter.SortBy?.Trim().ToLowerInvariant() switch
+        {
+            "rating" => projected.OrderByDescending(row => row.AvgRating),
+            "priceasc" => projected.OrderBy(row => row.StartingPrice ?? decimal.MaxValue),
+            "pricedesc" => projected.OrderByDescending(row => row.StartingPrice ?? decimal.MinValue),
+            _ => projected
+                .OrderByDescending(row => row.VerificationStatus == VerificationStatus.Trusted)
+                .ThenByDescending(row => row.AvgRating)
+        };
+
+        var items = projected
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList()
+            .Select(MapToListItem)
+            .ToList();
+
+        return Task.FromResult(new PagedResult<VendorListItemDto>
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Page = page,
+            PageSize = pageSize
+        });
     }
 
     public async Task<IEnumerable<PortfolioMediaItemDto>> GetPortfolioMediaAsync(long vendorId)
@@ -280,5 +362,36 @@ public class VendorService : IVendorService
         dto.LogoUrl = _attachmentService.ToAbsoluteUrl(dto.LogoUrl);
         dto.CoverImageUrl = _attachmentService.ToAbsoluteUrl(dto.CoverImageUrl);
         return dto;
+    }
+
+    private VendorListItemDto MapToListItem(VendorBrowseRow row) => new()
+    {
+        Id = row.Id,
+        BusinessName = row.BusinessName,
+        LogoUrl = _attachmentService.ToAbsoluteUrl(row.LogoUrl),
+        Category = row.CategoryName,
+        City = row.City,
+        StartingPrice = row.StartingPrice,
+        AvgRating = row.AvgRating,
+        ReviewCount = row.TotalReviews,
+        VerificationStatus = FormatVerificationStatus(row.VerificationStatus),
+        ShortDescription = row.BusinessDescription
+    };
+
+    private static string FormatVerificationStatus(string status) =>
+        string.IsNullOrEmpty(status) ? status : char.ToUpperInvariant(status[0]) + status[1..];
+
+    private sealed class VendorBrowseRow
+    {
+        public long Id { get; set; }
+        public string BusinessName { get; set; } = null!;
+        public string? BusinessDescription { get; set; }
+        public string? LogoUrl { get; set; }
+        public string? CategoryName { get; set; }
+        public string? City { get; set; }
+        public decimal AvgRating { get; set; }
+        public int TotalReviews { get; set; }
+        public string VerificationStatus { get; set; } = null!;
+        public decimal? StartingPrice { get; set; }
     }
 }

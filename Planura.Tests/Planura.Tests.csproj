@@ -23,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Planura.Apis.Controller\Planura.Apis.Controller.csproj" />
     <ProjectReference Include="..\Planura.Core.Application\Planura.Core.Application.csproj" />
     <ProjectReference Include="..\Planura.Core.Application.Abstraction\Planura.Core.Application.Abstraction.csproj" />
     <ProjectReference Include="..\Planura.Core.Domain\Planura.Core.Domain.csproj" />
