@@ -62,16 +62,16 @@ public class VendorAvailabilityService : IVendorAvailabilityService
         };
     }
 
-    public async Task<VendorAvailabilityDto> CreateAsync(CreateVendorAvailabilityDto dto)
+    public async Task<VendorAvailabilityDto> CreateAsync(long vendorId, CreateVendorAvailabilityDto dto)
     {
-        await EnsureVendorExistsAsync(dto.VendorId);
+        await EnsureVendorExistsAsync(vendorId);
         ValidateRange(dto.StartAt, dto.EndAt);
 
-        await EnsureNoOverlapAsync(dto.VendorId, dto.StartAt, dto.EndAt, excludeId: null);
+        await EnsureNoOverlapAsync(vendorId, dto.StartAt, dto.EndAt, excludeId: null);
 
         var slot = new VendorAvailability
         {
-            VendorId = dto.VendorId,
+            VendorId = vendorId,
             StartAt = dto.StartAt,
             EndAt = dto.EndAt,
             Status = AvailabilityStatus.Available,
@@ -84,12 +84,12 @@ public class VendorAvailabilityService : IVendorAvailabilityService
         return _mapper.Map<VendorAvailabilityDto>(slot);
     }
 
-    public async Task<VendorAvailabilityDto> UpdateAsync(long id, UpdateVendorAvailabilityDto dto)
+    public async Task<VendorAvailabilityDto> UpdateAsync(long id, long vendorId, UpdateVendorAvailabilityDto dto)
     {
         var repo = _unitOfWork.Repository<VendorAvailability, long>();
         var slot = await repo.GetWithSpecAsync(new VendorAvailabilityByIdSpecification(id));
 
-        if (slot is null)
+        if (slot is null || slot.VendorId != vendorId)
         {
             throw new NotFoundExeption(nameof(VendorAvailability), id);
         }
@@ -115,12 +115,12 @@ public class VendorAvailabilityService : IVendorAvailabilityService
         return _mapper.Map<VendorAvailabilityDto>(slot);
     }
 
-    public async Task DeleteAsync(long id)
+    public async Task DeleteAsync(long id, long vendorId)
     {
         var repo = _unitOfWork.Repository<VendorAvailability, long>();
         var slot = await repo.GetAsync(id);
 
-        if (slot is null)
+        if (slot is null || slot.VendorId != vendorId)
         {
             throw new NotFoundExeption(nameof(VendorAvailability), id);
         }

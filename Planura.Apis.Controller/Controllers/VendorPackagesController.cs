@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
+using Planura.Shared.Errors.Models;
 
 namespace Planura.Apis.Controllers;
 
@@ -12,10 +14,12 @@ namespace Planura.Apis.Controllers;
 public class VendorPackagesController : ControllerBase
 {
     private readonly IVendorPackageService _service;
+    private readonly ICurrentUserService _currentUserService;
 
-    public VendorPackagesController(IVendorPackageService service)
+    public VendorPackagesController(IVendorPackageService service, ICurrentUserService currentUserService)
     {
         _service = service;
+        _currentUserService = currentUserService;
     }
 
     [HttpGet]
@@ -45,23 +49,35 @@ public class VendorPackagesController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Policy = AuthorizationPolicies.ApprovedVendor)]
     [HttpPost]
     public async Task<ActionResult<VendorPackageDto>> Create([FromBody] CreateVendorPackageDto dto)
     {
-        var created = await _service.CreateAsync(dto);
+        var vendorId = _currentUserService.VendorId
+            ?? throw new UnAuthorizedExeption("No vendor profile is associated with this account.");
+
+        var created = await _service.CreateAsync(vendorId, dto);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
+    [Authorize(Policy = AuthorizationPolicies.ApprovedVendor)]
     [HttpPut("{id:long}")]
     public async Task<ActionResult<VendorPackageDto>> Update(long id, [FromBody] UpdateVendorPackageDto dto)
     {
-        return Ok(await _service.UpdateAsync(id, dto));
+        var vendorId = _currentUserService.VendorId
+            ?? throw new UnAuthorizedExeption("No vendor profile is associated with this account.");
+
+        return Ok(await _service.UpdateAsync(id, vendorId, dto));
     }
 
+    [Authorize(Policy = AuthorizationPolicies.ApprovedVendor)]
     [HttpDelete("{id:long}")]
     public async Task<ActionResult> Delete(long id)
     {
-        await _service.DeleteAsync(id);
+        var vendorId = _currentUserService.VendorId
+            ?? throw new UnAuthorizedExeption("No vendor profile is associated with this account.");
+
+        await _service.DeleteAsync(id, vendorId);
         return NoContent();
     }
 }

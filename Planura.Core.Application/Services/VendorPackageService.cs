@@ -51,24 +51,25 @@ public class VendorPackageService : IVendorPackageService
         return _mapper.Map<VendorPackageDto>(package);
     }
 
-    public async Task<VendorPackageDto> CreateAsync(CreateVendorPackageDto dto)
+    public async Task<VendorPackageDto> CreateAsync(long vendorId, CreateVendorPackageDto dto)
     {
-        await EnsureVendorExistsAsync(dto.VendorId);
+        await EnsureVendorExistsAsync(vendorId);
         ValidatePackage(dto.BasePrice, dto.Currency, dto.Title);
 
         var package = _mapper.Map<VendorPackage>(dto);
+        package.VendorId = vendorId;
         await _unitOfWork.Repository<VendorPackage, long>().AddAsync(package);
         await _unitOfWork.SaveChangesAsync();
 
         return _mapper.Map<VendorPackageDto>(package);
     }
 
-    public async Task<VendorPackageDto> UpdateAsync(long id, UpdateVendorPackageDto dto)
+    public async Task<VendorPackageDto> UpdateAsync(long id, long vendorId, UpdateVendorPackageDto dto)
     {
         var repo = _unitOfWork.Repository<VendorPackage, long>();
         var package = await repo.GetWithSpecAsync(new VendorPackageByIdSpecification(id));
 
-        if (package is null)
+        if (package is null || package.VendorId != vendorId)
         {
             throw new NotFoundExeption(nameof(VendorPackage), id);
         }
@@ -83,12 +84,12 @@ public class VendorPackageService : IVendorPackageService
         return _mapper.Map<VendorPackageDto>(package);
     }
 
-    public async Task DeleteAsync(long id)
+    public async Task DeleteAsync(long id, long vendorId)
     {
         var repo = _unitOfWork.Repository<VendorPackage, long>();
         var package = await repo.GetAsync(id);
 
-        if (package is null)
+        if (package is null || package.VendorId != vendorId)
         {
             throw new NotFoundExeption(nameof(VendorPackage), id);
         }

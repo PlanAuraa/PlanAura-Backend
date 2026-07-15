@@ -9,9 +9,9 @@ public interface IVendorAvailabilityService
     Task<VendorAvailabilityDto> GetByIdAsync(long id);
     Task<AvailabilityCheckResultDto> CheckAvailabilityAsync(AvailabilityCheckDto dto);
 
-    Task<VendorAvailabilityDto> CreateAsync(CreateVendorAvailabilityDto dto);
-    Task<VendorAvailabilityDto> UpdateAsync(long id, UpdateVendorAvailabilityDto dto);
-    Task DeleteAsync(long id);
+    Task<VendorAvailabilityDto> CreateAsync(long vendorId, CreateVendorAvailabilityDto dto);
+    Task<VendorAvailabilityDto> UpdateAsync(long id, long vendorId, UpdateVendorAvailabilityDto dto);
+    Task DeleteAsync(long id, long vendorId);
 
     Task<VendorAvailabilityDto> BookSlotAsync(BookSlotDto dto);
     Task<VendorAvailabilityDto> CancelBookingAsync(long availabilityId);
