@@ -3,6 +3,7 @@ using Moq;
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models.Vendor;
 using Planura.Core.Application.Services;
+using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
@@ -16,6 +17,13 @@ public class VendorServiceTests
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<IAttachmentService> _attachmentServiceMock = new();
 
+    public VendorServiceTests()
+    {
+        _attachmentServiceMock
+            .Setup(a => a.ToAbsoluteUrl(It.IsAny<string?>()))
+            .Returns((string? path) => path);
+    }
+
     private VendorService CreateService() => new(_unitOfWorkMock.Object, _attachmentServiceMock.Object);
 
     private static Vendor CreateVendor(long id = 1) => new()
@@ -24,6 +32,49 @@ public class VendorServiceTests
         UserId = 100 + id,
         BusinessName = "Test Business"
     };
+
+    private void SetupVendorQueryable(IEnumerable<Vendor> vendors)
+    {
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetQueryable()).Returns(vendors.AsQueryable());
+    }
+
+    private static Vendor CreateBrowsableVendor(
+        long id,
+        string status = "verified",
+        decimal avgRating = 4.0m,
+        string city = "Cairo",
+        long? categoryId = null,
+        ServiceCategory? category = null,
+        params decimal[] activePackagePrices)
+    {
+        var vendor = new Vendor
+        {
+            Id = id,
+            UserId = 100 + id,
+            BusinessName = $"Vendor {id}",
+            VerificationStatus = status,
+            AvgRating = avgRating,
+            TotalReviews = 10,
+            City = city,
+            CategoryId = categoryId,
+            Category = category
+        };
+
+        vendor.Packages = activePackagePrices
+            .Select((price, index) => new VendorPackage
+            {
+                Id = id * 100 + index,
+                VendorId = id,
+                Title = $"Package {index}",
+                BasePrice = price,
+                IsActive = true,
+                Vendor = vendor
+            })
+            .ToList();
+
+        return vendor;
+    }
 
     [Fact]
     public async Task ReorderPortfolioMediaAsync_IdSetMismatch_ThrowsBadRequest()
@@ -147,5 +198,230 @@ public class VendorServiceTests
 
         Assert.NotNull(captured);
         Assert.Equal(4, captured!.DisplayOrder);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_ExcludesUnverifiedPendingAndRejectedVendors()
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, status: VerificationStatus.Unverified),
+            CreateBrowsableVendor(2, status: VerificationStatus.Pending),
+            CreateBrowsableVendor(3, status: VerificationStatus.Rejected),
+            CreateBrowsableVendor(4, status: VerificationStatus.Verified),
+            CreateBrowsableVendor(5, status: VerificationStatus.Trusted)
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto());
+
+        Assert.Equal(2, result.TotalCount);
+        Assert.All(result.Items, item => Assert.Contains(item.Id, new[] { 4L, 5L }));
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_FiltersByCategoryId()
+    {
+        var catering = new ServiceCategory { Id = 1, NameEn = "Catering", Slug = "catering" };
+        var venues = new ServiceCategory { Id = 2, NameEn = "Venues", Slug = "venues" };
+
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, categoryId: 1, category: catering),
+            CreateBrowsableVendor(2, categoryId: 2, category: venues)
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { Category = "1" });
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(1, result.Items.Single().Id);
+        Assert.Equal("Catering", result.Items.Single().Category);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_FiltersByCategorySlug()
+    {
+        var catering = new ServiceCategory { Id = 1, NameEn = "Catering", Slug = "catering" };
+        var venues = new ServiceCategory { Id = 2, NameEn = "Venues", Slug = "venues" };
+
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, categoryId: 1, category: catering),
+            CreateBrowsableVendor(2, categoryId: 2, category: venues)
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { Category = "venues" });
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(2, result.Items.Single().Id);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_FiltersByCity_CaseInsensitiveContains()
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, city: "Cairo"),
+            CreateBrowsableVendor(2, city: "New Cairo"),
+            CreateBrowsableVendor(3, city: "Alexandria")
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { City = "cairo" });
+
+        Assert.Equal(2, result.TotalCount);
+        Assert.All(result.Items, item => Assert.Contains(item.Id, new[] { 1L, 2L }));
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_FiltersByPriceRange_UsesMinActivePackagePrice()
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, activePackagePrices: new decimal[] { 500m, 300m }),
+            CreateBrowsableVendor(2, activePackagePrices: new decimal[] { 1500m }),
+            CreateBrowsableVendor(3, activePackagePrices: new decimal[] { 5000m })
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { MinPrice = 400m, MaxPrice = 2000m });
+
+        Assert.Equal(1, result.TotalCount);
+        var item = result.Items.Single();
+        Assert.Equal(2, item.Id);
+        Assert.Equal(1500m, item.StartingPrice);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_StartingPrice_NullWhenNoActivePackages()
+    {
+        var vendorWithInactiveOnly = CreateBrowsableVendor(1);
+        vendorWithInactiveOnly.Packages = new List<VendorPackage>
+        {
+            new() { Id = 10, VendorId = 1, Title = "Inactive", BasePrice = 100m, IsActive = false, Vendor = vendorWithInactiveOnly }
+        };
+
+        SetupVendorQueryable(new[] { vendorWithInactiveOnly });
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto());
+
+        Assert.Null(result.Items.Single().StartingPrice);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_FiltersByMinRating()
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, avgRating: 3.5m),
+            CreateBrowsableVendor(2, avgRating: 4.8m)
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { MinRating = 4.5m });
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(2, result.Items.Single().Id);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_CombinedFilters_AppliesAllConditions()
+    {
+        var catering = new ServiceCategory { Id = 1, NameEn = "Catering", Slug = "catering" };
+
+        var vendors = new List<Vendor>
+        {
+            // matches everything
+            CreateBrowsableVendor(1, status: VerificationStatus.Trusted, avgRating: 4.7m, city: "Cairo", categoryId: 1, category: catering, activePackagePrices: new decimal[] { 800m }),
+            // wrong category
+            CreateBrowsableVendor(2, status: VerificationStatus.Verified, avgRating: 4.9m, city: "Cairo", categoryId: 2, category: new ServiceCategory { Id = 2, NameEn = "Venues", Slug = "venues" }, activePackagePrices: new decimal[] { 800m }),
+            // wrong city
+            CreateBrowsableVendor(3, status: VerificationStatus.Verified, avgRating: 4.9m, city: "Alexandria", categoryId: 1, category: catering, activePackagePrices: new decimal[] { 800m }),
+            // rating too low
+            CreateBrowsableVendor(4, status: VerificationStatus.Verified, avgRating: 2.0m, city: "Cairo", categoryId: 1, category: catering, activePackagePrices: new decimal[] { 800m }),
+            // price out of range
+            CreateBrowsableVendor(5, status: VerificationStatus.Verified, avgRating: 4.9m, city: "Cairo", categoryId: 1, category: catering, activePackagePrices: new decimal[] { 9000m }),
+            // not approved
+            CreateBrowsableVendor(6, status: VerificationStatus.Pending, avgRating: 4.9m, city: "Cairo", categoryId: 1, category: catering, activePackagePrices: new decimal[] { 800m })
+        };
+        SetupVendorQueryable(vendors);
+
+        var filter = new VendorBrowseFilterDto
+        {
+            Category = "catering",
+            City = "cairo",
+            MinRating = 4.0m,
+            MinPrice = 100m,
+            MaxPrice = 1000m
+        };
+
+        var result = await CreateService().BrowseVendorsAsync(filter);
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(1, result.Items.Single().Id);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_DefaultSort_TrustedFirstThenByRatingDescending()
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, status: VerificationStatus.Verified, avgRating: 4.9m),
+            CreateBrowsableVendor(2, status: VerificationStatus.Trusted, avgRating: 3.0m),
+            CreateBrowsableVendor(3, status: VerificationStatus.Trusted, avgRating: 4.5m),
+            CreateBrowsableVendor(4, status: VerificationStatus.Verified, avgRating: 4.95m)
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { PageSize = 50 });
+
+        Assert.Equal(new[] { 3L, 2L, 4L, 1L }, result.Items.Select(i => i.Id));
+    }
+
+    [Theory]
+    [InlineData("rating")]
+    [InlineData("priceAsc")]
+    [InlineData("priceDesc")]
+    public async Task BrowseVendorsAsync_SupportsAlternateSortOptions(string sortBy)
+    {
+        var vendors = new List<Vendor>
+        {
+            CreateBrowsableVendor(1, avgRating: 4.0m, activePackagePrices: new decimal[] { 900m }),
+            CreateBrowsableVendor(2, avgRating: 4.9m, activePackagePrices: new decimal[] { 300m })
+        };
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { SortBy = sortBy });
+
+        Assert.Equal(2, result.TotalCount);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_Pagination_ReturnsCorrectSliceAndTotalCount()
+    {
+        var vendors = Enumerable.Range(1, 25)
+            .Select(id => CreateBrowsableVendor(id, avgRating: 4.0m))
+            .ToList();
+        SetupVendorQueryable(vendors);
+
+        var page2 = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { Page = 2, PageSize = 10 });
+
+        Assert.Equal(25, page2.TotalCount);
+        Assert.Equal(2, page2.Page);
+        Assert.Equal(10, page2.PageSize);
+        Assert.Equal(10, page2.Items.Count);
+    }
+
+    [Fact]
+    public async Task BrowseVendorsAsync_PageSizeAboveMax_ClampsToDefault()
+    {
+        var vendors = Enumerable.Range(1, 5).Select(id => CreateBrowsableVendor(id)).ToList();
+        SetupVendorQueryable(vendors);
+
+        var result = await CreateService().BrowseVendorsAsync(new VendorBrowseFilterDto { PageSize = 500 });
+
+        Assert.Equal(12, result.PageSize);
     }
 }
