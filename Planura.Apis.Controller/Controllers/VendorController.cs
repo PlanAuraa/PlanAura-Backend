@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Common;
+using Planura.Core.Application.Models;
 using Planura.Core.Application.Models.Vendor;
 using Planura.Core.Application.Services;
 using Planura.Shared.Errors.Models;
@@ -18,6 +19,13 @@ public class VendorController : ControllerBase
     {
         _vendorService = vendorService;
         _currentUserService = currentUserService;
+    }
+
+    [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
+    [HttpGet]
+    public async Task<ActionResult<PagedResult<VendorListItemDto>>> BrowseVendors([FromQuery] VendorBrowseFilterDto filter)
+    {
+        return Ok(await _vendorService.BrowseVendorsAsync(filter));
     }
 
     [AllowAnonymous]

@@ -1,3 +1,4 @@
+using Planura.Core.Application.Models;
 using Planura.Core.Application.Models.Vendor;
 
 namespace Planura.Core.Application.Services;
@@ -6,6 +7,7 @@ public interface IVendorService
 {
     Task<VendorDto> GetByIdAsync(long vendorId);
     Task<VendorDto> UpdateProfileAsync(long vendorId, UpdateVendorProfileDto dto);
+    Task<PagedResult<VendorListItemDto>> BrowseVendorsAsync(VendorBrowseFilterDto filter);
 
     Task<IEnumerable<PortfolioMediaItemDto>> GetPortfolioMediaAsync(long vendorId);
     Task<PortfolioMediaItemDto> AddPortfolioMediaAsync(long vendorId, AddPortfolioMediaDto dto);
