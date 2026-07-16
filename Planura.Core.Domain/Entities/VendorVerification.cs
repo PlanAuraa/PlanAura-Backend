@@ -13,7 +13,6 @@ public class VendorVerification
     public DateTimeOffset? TrustedSince { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
-
     public Vendor Vendor { get; set; } = null!;
     public ApplicationUser? ReviewedByAdmin { get; set; }
     public ICollection<VendorVerificationHistory> History { get; set; } = new List<VendorVerificationHistory>();
