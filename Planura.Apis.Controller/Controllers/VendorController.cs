@@ -46,6 +46,16 @@ public class VendorController : ControllerBase
     }
 
     [Authorize(Policy = AuthorizationPolicies.VendorOnly)]
+    [HttpGet("me/dashboard-stats")]
+    public async Task<ActionResult<VendorDashboardStatsDto>> GetMyDashboardStats()
+    {
+        var vendorId = _currentUserService.VendorId
+            ?? throw new UnAuthorizedExeption("No vendor profile is associated with this account.");
+
+        return Ok(await _vendorService.GetDashboardStatsAsync(vendorId));
+    }
+
+    [Authorize(Policy = AuthorizationPolicies.VendorOnly)]
     [HttpPut("me")]
     public async Task<ActionResult<VendorDto>> UpdateMyProfile([FromForm] UpdateVendorProfileDto dto)
     {

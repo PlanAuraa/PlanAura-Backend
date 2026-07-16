@@ -1112,6 +1112,80 @@ public class BookingServiceTests
         Assert.Equal(20, result.PageSize);
     }
 
+    // ---------------- ListVendorBookingRequestsAsync ----------------
+
+    [Fact]
+    public async Task ListVendorBookingRequestsAsync_Valid_ReturnsPagedResult()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookings = new List<BookingRequest> { CreateBooking() };
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetCountAsync(It.IsAny<ISpecification<BookingRequest>>())).ReturnsAsync(1);
+        bookingRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<BookingRequest>>(), It.IsAny<bool>()))
+            .ReturnsAsync(bookings);
+
+        var service = CreateService();
+        var result = await service.ListVendorBookingRequestsAsync(VendorUserId, new BookingRequestFilterDto());
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Single(result.Items);
+        Assert.Equal(VendorId, result.Items[0].VendorId);
+        Assert.Equal(1, result.Page);
+        Assert.Equal(20, result.PageSize);
+    }
+
+    [Fact]
+    public async Task ListVendorBookingRequestsAsync_VendorNotFound_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(
+            () => service.ListVendorBookingRequestsAsync(VendorUserId, new BookingRequestFilterDto()));
+    }
+
+    // ---------------- GetVendorBookingRequestAsync ----------------
+
+    [Fact]
+    public async Task GetVendorBookingRequestAsync_NotFound_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync((BookingRequest?)null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.GetVendorBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task GetVendorBookingRequestAsync_OwnedByAnotherVendor_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(new Vendor { Id = 999, UserId = VendorUserId, BusinessName = "Other" });
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking());
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.GetVendorBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task GetVendorBookingRequestAsync_Valid_ReturnsDto()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking());
+
+        var service = CreateService();
+        var result = await service.GetVendorBookingRequestAsync(1, VendorUserId);
+
+        Assert.Equal(1, result.Id);
+        Assert.Equal(VendorId, result.VendorId);
+    }
+
     // ---------------- FlagDisputeAsync ----------------
 
     [Fact]

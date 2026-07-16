@@ -583,6 +583,44 @@ public class BookingService : IBookingService
         };
     }
 
+    public async Task<PagedResult<BookingRequestDto>> ListVendorBookingRequestsAsync(long vendorUserId, BookingRequestFilterDto filter)
+    {
+        var vendorId = await ResolveVendorIdAsync(vendorUserId);
+
+        var page = filter.Page < 1 ? 1 : filter.Page;
+        var pageSize = filter.PageSize is < 1 or > 100 ? 20 : filter.PageSize;
+        var skip = (page - 1) * pageSize;
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+
+        var totalCount = await repo.GetCountAsync(
+            new BookingRequestsByVendorSpecification(vendorId, filter.Status, skip: null, take: null));
+
+        var items = await repo.GetAllWithSpecAsync(
+            new BookingRequestsByVendorSpecification(vendorId, filter.Status, skip, pageSize));
+
+        return new PagedResult<BookingRequestDto>
+        {
+            Items = _mapper.Map<List<BookingRequestDto>>(items),
+            TotalCount = totalCount,
+            Page = page,
+            PageSize = pageSize
+        };
+    }
+
+    public async Task<BookingRequestDto> GetVendorBookingRequestAsync(long bookingRequestId, long vendorUserId)
+    {
+        var vendorId = await ResolveVendorIdAsync(vendorUserId);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.VendorId != vendorId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        return _mapper.Map<BookingRequestDto>(booking);
+    }
+
     public async Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason)
     {
         if (string.IsNullOrWhiteSpace(reason))

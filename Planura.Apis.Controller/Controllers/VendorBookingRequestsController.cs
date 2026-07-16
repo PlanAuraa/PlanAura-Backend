@@ -24,6 +24,20 @@ public class VendorBookingRequestsController : ControllerBase
     private long CurrentUserId => _currentUserService.UserId
         ?? throw new UnAuthorizedExeption("No authenticated user.");
 
+    [HttpGet("incoming")]
+    public async Task<ActionResult<PagedResult<BookingRequestDto>>> ListIncoming([FromQuery] BookingRequestFilterDto filter)
+    {
+        var result = await _bookingService.ListVendorBookingRequestsAsync(CurrentUserId, filter);
+        return Ok(result);
+    }
+
+    [HttpGet("incoming/{id:long}")]
+    public async Task<ActionResult<BookingRequestDto>> GetIncomingById(long id)
+    {
+        var result = await _bookingService.GetVendorBookingRequestAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
     [HttpPost("{id:long}/accept")]
     public async Task<ActionResult<BookingRequestDto>> Accept(long id)
     {
