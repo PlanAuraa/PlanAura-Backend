@@ -1,9 +1,11 @@
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Models.Vendor;
+using Planura.Core.Application.Specifications;
 using Planura.Core.Application.Specifications.Vendor;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
+using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
 
@@ -168,6 +170,43 @@ public class VendorService : IVendorService
             Page = page,
             PageSize = pageSize
         });
+    }
+
+    public async Task<VendorDashboardStatsDto> GetDashboardStatsAsync(long vendorId)
+    {
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(vendorId);
+        if (vendor is null)
+        {
+            throw new NotFoundExeption(nameof(Vendor), vendorId);
+        }
+
+        var bookings = (await _unitOfWork.Repository<BookingRequest, long>()
+            .GetAllWithSpecAsync(new BookingRequestsByVendorSpecification(vendorId, null, null, null))).ToList();
+
+        var completedPayments = await _unitOfWork.Repository<Payment, long>()
+            .GetAllWithSpecAsync(new PaymentsByVendorSpecification(vendorId, PaymentStatus.Completed));
+
+        var activePackages = await _unitOfWork.Repository<VendorPackage, long>()
+            .GetCountAsync(new VendorPackagesByVendorSpecification(vendorId, activeOnly: true));
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        return new VendorDashboardStatsDto
+        {
+            TotalBookingRequests = bookings.Count,
+            PendingRequests = bookings.Count(b => b.Status == BookingStatus.Pending),
+            AcceptedRequests = bookings.Count(b => b.Status == BookingStatus.Accepted),
+            RejectedRequests = bookings.Count(b => b.Status == BookingStatus.Rejected),
+            CancelledRequests = bookings.Count(b => b.Status == BookingStatus.Cancelled),
+            CompletedRequests = bookings.Count(b => b.Status == BookingStatus.Completed),
+            ExpiredRequests = bookings.Count(b => b.Status == BookingStatus.Expired),
+            UpcomingBookings = bookings.Count(b => b.Status == BookingStatus.Accepted && b.EventDate >= today),
+            TotalRevenue = completedPayments.Sum(p => p.Amount),
+            AvgRating = vendor.AvgRating,
+            TotalReviews = vendor.TotalReviews,
+            TotalCompletedBookings = vendor.TotalCompletedBookings,
+            ActivePackages = activePackages
+        };
     }
 
     public async Task<IEnumerable<PortfolioMediaItemDto>> GetPortfolioMediaAsync(long vendorId)

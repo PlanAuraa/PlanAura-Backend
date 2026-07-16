@@ -8,6 +8,7 @@ public interface IVendorService
     Task<VendorDto> GetByIdAsync(long vendorId);
     Task<VendorDto> UpdateProfileAsync(long vendorId, UpdateVendorProfileDto dto);
     Task<PagedResult<VendorListItemDto>> BrowseVendorsAsync(VendorBrowseFilterDto filter);
+    Task<VendorDashboardStatsDto> GetDashboardStatsAsync(long vendorId);
 
     Task<IEnumerable<PortfolioMediaItemDto>> GetPortfolioMediaAsync(long vendorId);
     Task<PortfolioMediaItemDto> AddPortfolioMediaAsync(long vendorId, AddPortfolioMediaDto dto);
