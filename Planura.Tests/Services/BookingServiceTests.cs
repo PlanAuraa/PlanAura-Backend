@@ -2,6 +2,7 @@ using AutoMapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Mappings;
 using Planura.Core.Application.Models;
@@ -24,9 +25,12 @@ public class BookingServiceTests
     private const long VendorUserId = 200;
     private const long EventPlanId = 30;
     private const long AvailabilityId = 40;
+    private const long PackageId = 99;
+    private const decimal PackagePrice = 5000m;
 
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<INotificationService> _notificationServiceMock = new();
+    private readonly Mock<IPaymentGatewayService> _paymentGatewayServiceMock = new();
     private readonly IMapper _mapper = new MapperConfiguration(
         cfg => cfg.AddProfile<MappingProfile>(),
         NullLoggerFactory.Instance).CreateMapper();
@@ -35,7 +39,46 @@ public class BookingServiceTests
         _unitOfWorkMock.Object,
         _mapper,
         _notificationServiceMock.Object,
-        Options.Create(new BookingOptions { HoldTtlHours = 48, PaymentDeadlineHours = 72 }));
+        _paymentGatewayServiceMock.Object,
+        Options.Create(new BookingOptions { HoldTtlHours = 48 }),
+        Options.Create(new StripeOptions
+        {
+            SecretKey = "sk_test_x",
+            PublishableKey = "pk_test_x",
+            WebhookSecret = "whsec_x",
+            DefaultCurrency = "EGP"
+        }),
+        NullLogger<BookingService>.Instance);
+
+    private static CreateBookingRequestDto CreateValidDto(
+        long? vendorPackageId = PackageId,
+        int? guestCount = null,
+        string paymentMethodId = "pm_card_visa",
+        string requestId = "req-1") => new()
+    {
+        EventPlanId = EventPlanId,
+        AvailabilityId = AvailabilityId,
+        VendorPackageId = vendorPackageId,
+        GuestCount = guestCount,
+        PaymentMethodId = paymentMethodId,
+        RequestId = requestId
+    };
+
+    private Mock<IGenericRepository<VendorPackage, long>> SetupPackageRepo(
+        long vendorId = VendorId, decimal basePrice = PackagePrice, int? maxGuests = null)
+    {
+        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
+        packageRepo.Setup(r => r.GetAsync(PackageId))
+            .ReturnsAsync(new VendorPackage { Id = PackageId, VendorId = vendorId, Title = "Gold", BasePrice = basePrice, MaxGuests = maxGuests });
+        return packageRepo;
+    }
+
+    private void SetupAuthorizeSucceeds(string paymentIntentId = "pi_auth_123")
+    {
+        _paymentGatewayServiceMock
+            .Setup(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()))
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = paymentIntentId, ClientSecret = "secret", Status = "requires_capture" });
+    }
 
     private static Client CreateClient() => new() { Id = ClientId, UserId = ClientUserId };
 
@@ -87,6 +130,23 @@ public class BookingServiceTests
         var repo = _unitOfWorkMock.SetupRepository<Client, long>();
         repo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(client);
     }
+
+    private void SetupVendorUserRepo(Vendor? vendor)
+    {
+        var repo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        repo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Vendor>>())).ReturnsAsync(vendor);
+    }
+
+    private static Payment CreateAuthorizedPayment(string gatewayReference = "pi_test") => new()
+    {
+        Id = 1,
+        BookingRequestId = 1,
+        ClientId = ClientId,
+        VendorId = VendorId,
+        Amount = PackagePrice,
+        Status = PaymentStatus.Authorized,
+        GatewayReference = gatewayReference
+    };
 
     // ---------------- CreateBookingRequestAsync ----------------
 
@@ -266,9 +326,9 @@ public class BookingServiceTests
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
 
-        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
-        packageRepo.Setup(r => r.GetAsync(99))
-            .ReturnsAsync(new VendorPackage { Id = 99, VendorId = VendorId, Title = "Gold", BasePrice = 5000m, MaxGuests = 100 });
+        SetupPackageRepo(maxGuests: 100);
+        SetupAuthorizeSucceeds();
+        _unitOfWorkMock.SetupRepository<Payment, long>();
 
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         BookingRequest? capturedBooking = null;
@@ -279,19 +339,13 @@ public class BookingServiceTests
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
 
         var service = CreateService();
-        var dto = new CreateBookingRequestDto
-        {
-            EventPlanId = EventPlanId,
-            AvailabilityId = AvailabilityId,
-            VendorPackageId = 99,
-            GuestCount = 100
-        };
+        var dto = CreateValidDto(guestCount: 100);
 
         await service.CreateBookingRequestAsync(ClientUserId, dto);
 
         Assert.NotNull(capturedBooking);
         Assert.Equal(100, capturedBooking!.GuestCount);
-        Assert.Equal(5000m, capturedBooking.AgreedPrice);
+        Assert.Equal(PackagePrice, capturedBooking.AgreedPrice);
     }
 
     [Fact]
@@ -308,9 +362,9 @@ public class BookingServiceTests
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
 
-        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
-        packageRepo.Setup(r => r.GetAsync(99))
-            .ReturnsAsync(new VendorPackage { Id = 99, VendorId = VendorId, Title = "Custom", BasePrice = 5000m, MaxGuests = null });
+        SetupPackageRepo(maxGuests: null);
+        SetupAuthorizeSucceeds();
+        _unitOfWorkMock.SetupRepository<Payment, long>();
 
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         BookingRequest? capturedBooking = null;
@@ -321,23 +375,118 @@ public class BookingServiceTests
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
 
         var service = CreateService();
-        var dto = new CreateBookingRequestDto
-        {
-            EventPlanId = EventPlanId,
-            AvailabilityId = AvailabilityId,
-            VendorPackageId = 99,
-            GuestCount = 100_000
-        };
+        var dto = CreateValidDto(guestCount: 100_000);
 
         await service.CreateBookingRequestAsync(ClientUserId, dto);
 
         Assert.NotNull(capturedBooking);
         Assert.Equal(100_000, capturedBooking!.GuestCount);
-        Assert.Equal(5000m, capturedBooking.AgreedPrice);
+        Assert.Equal(PackagePrice, capturedBooking.AgreedPrice);
     }
 
     [Fact]
-    public async Task CreateBookingRequestAsync_Valid_CreatesBookingHoldsSlotAndWritesHistory()
+    public async Task CreateBookingRequestAsync_NoPackageSelected_ThrowsBadRequest()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        var service = CreateService();
+        var dto = CreateValidDto(vendorPackageId: null);
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+
+        _paymentGatewayServiceMock.Verify(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_MissingPaymentMethodId_ThrowsBadRequest()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo();
+
+        var service = CreateService();
+        var dto = CreateValidDto(paymentMethodId: "");
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+
+        _paymentGatewayServiceMock.Verify(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_MissingRequestId_ThrowsBadRequest()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo();
+
+        var service = CreateService();
+        var dto = CreateValidDto(requestId: "");
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+
+        _paymentGatewayServiceMock.Verify(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_AuthorizationDeclined_PropagatesAndNeverCreatesBooking()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>()))
+            .ReturnsAsync(CreateSlot());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo();
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()))
+            .ThrowsAsync(new PaymentDeclinedExeption("Your card was declined: insufficient_funds"));
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+
+        var service = CreateService();
+        var dto = CreateValidDto();
+
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+
+        bookingRepo.Verify(r => r.AddAsync(It.IsAny<BookingRequest>()), Times.Never);
+        _unitOfWorkMock.Verify(u => u.BeginTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_Valid_AuthorizesPaymentAndCreatesAuthorizedPaymentRecord()
     {
         SetupClientRepo(CreateClient());
         var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
@@ -350,10 +499,19 @@ public class BookingServiceTests
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
 
+        SetupPackageRepo();
+        SetupAuthorizeSucceeds("pi_auth_999");
+
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         BookingRequest? capturedBooking = null;
         bookingRepo.Setup(r => r.AddAsync(It.IsAny<BookingRequest>()))
             .Callback<BookingRequest>(b => capturedBooking = b)
+            .Returns(Task.CompletedTask);
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        Payment? capturedPayment = null;
+        paymentRepo.Setup(r => r.AddAsync(It.IsAny<Payment>()))
+            .Callback<Payment>(p => capturedPayment = p)
             .Returns(Task.CompletedTask);
 
         var historyRepo = _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
@@ -363,13 +521,8 @@ public class BookingServiceTests
             .Returns(Task.CompletedTask);
 
         var service = CreateService();
-        var dto = new CreateBookingRequestDto
-        {
-            EventPlanId = EventPlanId,
-            AvailabilityId = AvailabilityId,
-            GuestCount = 100,
-            ClientMessage = "Please confirm"
-        };
+        var dto = CreateValidDto(guestCount: 100, paymentMethodId: "pm_card_visa", requestId: "req-abc");
+        dto.ClientMessage = "Please confirm";
 
         var result = await service.CreateBookingRequestAsync(ClientUserId, dto);
 
@@ -380,6 +533,14 @@ public class BookingServiceTests
         Assert.Equal(VendorId, capturedBooking.VendorId);
         Assert.Equal(new DateOnly(2026, 8, 1), capturedBooking.EventDate);
 
+        Assert.NotNull(capturedPayment);
+        Assert.Equal(PaymentStatus.Authorized, capturedPayment!.Status);
+        Assert.Equal("pi_auth_999", capturedPayment.GatewayReference);
+        Assert.Equal("pm_card_visa", capturedPayment.PaymentMethod);
+        Assert.Equal(PackagePrice, capturedPayment.Amount);
+        Assert.NotNull(capturedPayment.AuthorizedAt);
+        Assert.Same(capturedBooking, capturedPayment.BookingRequest);
+
         Assert.Equal(AvailabilityStatus.Held, slot.Status);
         Assert.NotNull(slot.HoldExpiresAt);
         Assert.Same(capturedBooking, slot.BookingRequest);
@@ -389,8 +550,15 @@ public class BookingServiceTests
         Assert.Equal("Pending", capturedHistory.NewStatus);
         Assert.Equal(ClientUserId, capturedHistory.ChangedByUserId);
 
+        _paymentGatewayServiceMock.Verify(g => g.AuthorizePaymentIntentAsync(It.Is<AuthorizePaymentIntentRequest>(
+            r => r.AmountInSmallestUnit == 500000
+                && r.Currency == "egp"
+                && r.PaymentMethodId == "pm_card_visa"
+                && r.IdempotencyKey == "req-abc")), Times.Once);
+
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         _unitOfWorkMock.Verify(u => u.RollbackTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()), Times.Never);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             VendorUserId, NotificationTypes.BookingRequestReceived, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
 
@@ -398,7 +566,7 @@ public class BookingServiceTests
     }
 
     [Fact]
-    public async Task CreateBookingRequestAsync_ConcurrencyConflictOnCommit_ThrowsSlotUnavailableAndRollsBack()
+    public async Task CreateBookingRequestAsync_ConcurrencyConflictOnCommit_ThrowsSlotUnavailableRollsBackAndVoidsAuthorization()
     {
         SetupClientRepo(CreateClient());
         var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
@@ -411,22 +579,28 @@ public class BookingServiceTests
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
 
+        SetupPackageRepo();
+        SetupAuthorizeSucceeds("pi_auth_conflict");
+
         _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        _unitOfWorkMock.SetupRepository<Payment, long>();
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
 
         _unitOfWorkMock.Setup(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException());
 
         var service = CreateService();
-        var dto = new CreateBookingRequestDto { EventPlanId = EventPlanId, AvailabilityId = AvailabilityId };
+        var dto = CreateValidDto();
 
         await Assert.ThrowsAsync<SlotUnavailableExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
 
         _unitOfWorkMock.Verify(u => u.RollbackTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_auth_conflict")), Times.Once);
     }
 
     [Fact]
-    public async Task CreateBookingRequestAsync_UniqueIndexViolationOnCommit_ThrowsSlotUnavailableAndRollsBack()
+    public async Task CreateBookingRequestAsync_UniqueIndexViolationOnCommit_ThrowsSlotUnavailableRollsBackAndVoidsAuthorization()
     {
         SetupClientRepo(CreateClient());
         var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
@@ -439,16 +613,60 @@ public class BookingServiceTests
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
 
+        SetupPackageRepo();
+        SetupAuthorizeSucceeds("pi_auth_unique");
+
         _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        _unitOfWorkMock.SetupRepository<Payment, long>();
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
 
         _unitOfWorkMock.Setup(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("duplicate key", new SqlException(2627)));
 
         var service = CreateService();
-        var dto = new CreateBookingRequestDto { EventPlanId = EventPlanId, AvailabilityId = AvailabilityId };
+        var dto = CreateValidDto();
 
         await Assert.ThrowsAsync<SlotUnavailableExeption>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+
+        _unitOfWorkMock.Verify(u => u.RollbackTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_auth_unique")), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_CommitFailsAndCompensatingCancelAlsoFails_StillRethrowsOriginalException()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slot = CreateSlot();
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>())).ReturnsAsync(slot);
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo();
+        SetupAuthorizeSucceeds("pi_auth_double_fail");
+
+        _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        _unitOfWorkMock.SetupRepository<Payment, long>();
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        _unitOfWorkMock.Setup(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("db unavailable"));
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("stripe unreachable"));
+
+        var service = CreateService();
+        var dto = CreateValidDto();
+
+        // The original DB failure must still propagate even though the compensating cancel itself failed.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateBookingRequestAsync(ClientUserId, dto));
+        Assert.Equal("db unavailable", ex.Message);
 
         _unitOfWorkMock.Verify(u => u.RollbackTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -513,6 +731,10 @@ public class BookingServiceTests
         var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
         vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
 
+        var payment = new Payment { Id = 5, BookingRequestId = 1, ClientId = ClientId, VendorId = VendorId, Amount = 5000m, Status = PaymentStatus.Authorized, GatewayReference = "pi_to_void" };
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
         var service = CreateService();
         var result = await service.CancelBookingRequestAsync(1, ClientUserId);
 
@@ -524,10 +746,308 @@ public class BookingServiceTests
         Assert.Equal("Cancelled", capturedHistory.NewStatus);
 
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_to_void")), Times.Once);
+        Assert.Equal(PaymentStatus.Cancelled, payment.Status);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
 
         Assert.Equal(BookingStatus.Cancelled, result.Status);
+    }
+
+    // ---------------- AcceptBookingRequestAsync ----------------
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_BookingNotFound_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync((BookingRequest?)null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_OwnedByAnotherVendor_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(new Vendor { Id = 999, UserId = VendorUserId, BusinessName = "Other" });
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking());
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_NotPending_ThrowsBadRequest()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking(status: BookingStatus.Accepted));
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_NoAuthorizedPayment_ThrowsBadRequest()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking());
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync((Payment?)null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_Valid_CapturesPaymentAcceptsBookingAndBooksSlot()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var payment = CreateAuthorizedPayment("pi_accept_test");
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CapturePaymentIntentAsync(It.IsAny<CapturePaymentIntentRequest>()))
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_accept_test", ClientSecret = "secret", Status = "succeeded" });
+
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        var historyRepo = _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        BookingStatusHistory? capturedHistory = null;
+        historyRepo.Setup(r => r.AddAsync(It.IsAny<BookingStatusHistory>()))
+            .Callback<BookingStatusHistory>(h => capturedHistory = h)
+            .Returns(Task.CompletedTask);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+        var result = await service.AcceptBookingRequestAsync(1, VendorUserId);
+
+        Assert.Equal(BookingStatus.Accepted, booking.Status);
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+        Assert.NotNull(booking.RespondedAt);
+
+        Assert.Equal(PaymentStatus.Completed, payment.Status);
+        Assert.NotNull(payment.PaidAt);
+
+        Assert.Equal(AvailabilityStatus.Booked, hold.Status);
+        Assert.Null(hold.HoldExpiresAt);
+
+        Assert.NotNull(capturedHistory);
+        Assert.Equal("Pending", capturedHistory!.PreviousStatus);
+        Assert.Equal("Accepted", capturedHistory.NewStatus);
+        Assert.Equal(VendorUserId, capturedHistory.ChangedByUserId);
+
+        _paymentGatewayServiceMock.Verify(g => g.CapturePaymentIntentAsync(It.Is<CapturePaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_accept_test")), Times.Once);
+
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            ClientUserId, NotificationTypes.BookingAccepted, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+
+        Assert.Equal(BookingStatus.Accepted, result.Status);
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_CaptureFails_AutoDeclinesBookingAndThrowsPaymentDeclined()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var payment = CreateAuthorizedPayment("pi_capture_fail");
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CapturePaymentIntentAsync(It.IsAny<CapturePaymentIntentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("card no longer valid"));
+
+        var holdRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        holdRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability>());
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+
+        Assert.Equal(BookingStatus.Rejected, booking.Status);
+        Assert.Equal(PaymentStatus.Failed, payment.Status);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    // ---------------- RejectBookingRequestAsync ----------------
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_BookingNotFound_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync((BookingRequest?)null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.RejectBookingRequestAsync(1, VendorUserId, "no longer available"));
+    }
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_OwnedByAnotherVendor_ThrowsNotFound()
+    {
+        SetupVendorUserRepo(new Vendor { Id = 999, UserId = VendorUserId, BusinessName = "Other" });
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking());
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.RejectBookingRequestAsync(1, VendorUserId, null));
+    }
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_NotPending_ThrowsBadRequest()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(CreateBooking(status: BookingStatus.Rejected));
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.RejectBookingRequestAsync(1, VendorUserId, null));
+    }
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_Valid_RejectsDeletesHoldVoidsAuthorizationAndNotifiesClient()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var holds = new List<VendorAvailability> { CreateSlot(status: AvailabilityStatus.Held) };
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(holds);
+
+        var historyRepo = _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        BookingStatusHistory? capturedHistory = null;
+        historyRepo.Setup(r => r.AddAsync(It.IsAny<BookingStatusHistory>()))
+            .Callback<BookingStatusHistory>(h => capturedHistory = h)
+            .Returns(Task.CompletedTask);
+
+        var payment = CreateAuthorizedPayment("pi_reject_test");
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+        var result = await service.RejectBookingRequestAsync(1, VendorUserId, "Fully booked that day");
+
+        Assert.Equal(BookingStatus.Rejected, booking.Status);
+        Assert.Equal("Fully booked that day", booking.VendorResponse);
+        Assert.NotNull(booking.RespondedAt);
+        slotRepo.Verify(r => r.DeleteRange(holds), Times.Once);
+
+        Assert.NotNull(capturedHistory);
+        Assert.Equal("Pending", capturedHistory!.PreviousStatus);
+        Assert.Equal("Rejected", capturedHistory.NewStatus);
+        Assert.Equal(VendorUserId, capturedHistory.ChangedByUserId);
+
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_reject_test")), Times.Once);
+        Assert.Equal(PaymentStatus.Cancelled, payment.Status);
+
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+
+        Assert.Equal(BookingStatus.Rejected, result.Status);
+    }
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_VoidFails_StillCompletesRejection()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability>());
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var payment = CreateAuthorizedPayment("pi_reject_void_fail");
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("stripe unreachable"));
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+        var result = await service.RejectBookingRequestAsync(1, VendorUserId, null);
+
+        Assert.Equal(BookingStatus.Rejected, booking.Status);
+        Assert.Equal(PaymentStatus.Authorized, payment.Status);
+        Assert.Equal(BookingStatus.Rejected, result.Status);
+    }
+
+    [Fact]
+    public async Task RejectBookingRequestAsync_NoAuthorizedPayment_StillRejectsWithoutVoiding()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability>());
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync((Payment?)null);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+        await service.RejectBookingRequestAsync(1, VendorUserId, null);
+
+        Assert.Equal(BookingStatus.Rejected, booking.Status);
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()), Times.Never);
     }
 
     // ---------------- GetBookingRequestAsync ----------------

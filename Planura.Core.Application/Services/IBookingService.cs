@@ -9,4 +9,6 @@ public interface IBookingService
     Task<BookingRequestDto> GetBookingRequestAsync(long bookingRequestId, long clientUserId);
     Task<PagedResult<BookingRequestDto>> ListMyBookingRequestsAsync(long clientUserId, BookingRequestFilterDto filter);
     Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason);
+    Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId);
+    Task<BookingRequestDto> RejectBookingRequestAsync(long bookingRequestId, long vendorUserId, string? reason);
 }

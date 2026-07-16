@@ -1,4 +1,5 @@
 using AutoMapper;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
@@ -19,128 +20,22 @@ public class PaymentService : IPaymentService
     private readonly INotificationService _notificationService;
     private readonly IPaymentGatewayService _paymentGatewayService;
     private readonly StripeOptions _stripeOptions;
+    private readonly ILogger<PaymentService> _logger;
 
     public PaymentService(
         IUnitOfWork unitOfWork,
         IMapper mapper,
         INotificationService notificationService,
         IPaymentGatewayService paymentGatewayService,
-        IOptions<StripeOptions> stripeOptions)
+        IOptions<StripeOptions> stripeOptions,
+        ILogger<PaymentService> logger)
     {
         _unitOfWork = unitOfWork;
         _mapper = mapper;
         _notificationService = notificationService;
         _paymentGatewayService = paymentGatewayService;
         _stripeOptions = stripeOptions.Value;
-    }
-
-    public async Task<PaymentOptionsDto> GetPaymentOptionsAsync(long bookingRequestId, long clientUserId)
-    {
-        var clientId = await ResolveClientIdAsync(clientUserId);
-
-        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
-        if (booking is null || booking.ClientId != clientId)
-        {
-            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
-        }
-
-        var isPayable = booking.Status == BookingStatus.Accepted
-            && booking.PaymentStatus == BookingPaymentStatus.Unpaid
-            && booking.AgreedPrice is > 0;
-
-        return new PaymentOptionsDto
-        {
-            BookingRequestId = booking.Id,
-            AmountDue = booking.AgreedPrice ?? 0m,
-            Currency = _stripeOptions.DefaultCurrency,
-            IsPayable = isPayable,
-            PublishableKey = _stripeOptions.PublishableKey
-        };
-    }
-
-    public async Task<InitiatePaymentResultDto> InitiatePaymentAsync(long bookingRequestId, long clientUserId, InitiatePaymentDto dto)
-    {
-        var clientId = await ResolveClientIdAsync(clientUserId);
-
-        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
-        if (booking is null || booking.ClientId != clientId)
-        {
-            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
-        }
-
-        if (booking.Status != BookingStatus.Accepted)
-        {
-            throw new BadRequestExeption(
-                $"Cannot initiate payment for a booking request with status '{booking.Status}'. The vendor must accept it first.");
-        }
-
-        if (booking.PaymentStatus != BookingPaymentStatus.Unpaid)
-        {
-            throw new BadRequestExeption(
-                $"This booking's payment status is '{booking.PaymentStatus}' and cannot be paid again.");
-        }
-
-        if (booking.AgreedPrice is null || booking.AgreedPrice <= 0)
-        {
-            throw new BadRequestExeption("This booking does not have an agreed price to charge.");
-        }
-
-        var paymentRepo = _unitOfWork.Repository<Payment, long>();
-        var existingPending = await paymentRepo.GetWithSpecAsync(
-            new PendingPaymentByBookingRequestSpecification(bookingRequestId));
-        if (existingPending is not null)
-        {
-            throw new BadRequestExeption("A payment is already in progress for this booking request.");
-        }
-
-        var amount = booking.AgreedPrice.Value;
-
-        var payment = new Payment
-        {
-            BookingRequestId = bookingRequestId,
-            ClientId = clientId,
-            VendorId = booking.VendorId,
-            Amount = amount,
-            Status = PaymentStatus.Pending
-        };
-
-        await paymentRepo.AddAsync(payment);
-        await _unitOfWork.SaveChangesAsync();
-
-        try
-        {
-            var intentResult = await _paymentGatewayService.CreatePaymentIntentAsync(new CreatePaymentIntentRequest
-            {
-                AmountInSmallestUnit = ConvertToSmallestUnit(amount),
-                Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
-                IdempotencyKey = $"booking-{bookingRequestId}-payment-{payment.Id}",
-                Metadata = new Dictionary<string, string>
-                {
-                    ["booking_request_id"] = bookingRequestId.ToString(),
-                    ["payment_id"] = payment.Id.ToString()
-                }
-            });
-
-            payment.GatewayReference = intentResult.PaymentIntentId;
-            paymentRepo.Update(payment);
-            await _unitOfWork.SaveChangesAsync();
-
-            return new InitiatePaymentResultDto
-            {
-                PaymentId = payment.Id,
-                ClientSecret = intentResult.ClientSecret,
-                PublishableKey = _stripeOptions.PublishableKey,
-                Amount = amount,
-                Currency = _stripeOptions.DefaultCurrency
-            };
-        }
-        catch
-        {
-            payment.Status = PaymentStatus.Failed;
-            paymentRepo.Update(payment);
-            await _unitOfWork.SaveChangesAsync();
-            throw;
-        }
+        _logger = logger;
     }
 
     public async Task HandleStripeWebhookAsync(string rawJson, string stripeSignatureHeader)
@@ -154,8 +49,28 @@ public class PaymentService : IPaymentService
 
         var payment = await _unitOfWork.Repository<Payment, long>()
             .GetWithSpecAsync(new PaymentByGatewayReferenceSpecification(gatewayEvent.PaymentIntentId));
+
         if (payment is null)
         {
+            if (gatewayEvent.Type == "payment_intent.amount_capturable_updated")
+            {
+                // The synchronous AuthorizePaymentIntentAsync call in CreateBookingRequestAsync normally
+                // already recorded this Payment row before this webhook arrives. Getting here with no
+                // matching row means that synchronous response was lost (crash/timeout) after Stripe
+                // authorized the card — the booking/payment were never created (see option (b) in the
+                // authorize-first design). This is informational/logging only; no auto-recovery is attempted
+                // since there's no BookingRequestId to attach it to, only the metadata captured at authorize time.
+                var metadata = gatewayEvent.Metadata is null
+                    ? "none"
+                    : string.Join(", ", gatewayEvent.Metadata.Select(kv => $"{kv.Key}={kv.Value}"));
+
+                _logger.LogWarning(
+                    "ORPHANED STRIPE AUTHORIZATION: PaymentIntent {PaymentIntentId} became capturable in Stripe " +
+                    "but no matching Payment record exists locally. Likely a lost response after the synchronous " +
+                    "authorize call. Metadata: {Metadata}. Needs manual reconciliation in Stripe.",
+                    gatewayEvent.PaymentIntentId, metadata);
+            }
+
             return;
         }
 
@@ -166,6 +81,12 @@ public class PaymentService : IPaymentService
                 break;
             case "payment_intent.payment_failed":
                 await HandlePaymentFailedAsync(payment);
+                break;
+            case "payment_intent.canceled":
+                await HandlePaymentCanceledAsync(payment);
+                break;
+            case "payment_intent.amount_capturable_updated":
+                // Payment already exists (created by the synchronous authorize call) — nothing to reconcile.
                 break;
             case "charge.refunded":
                 await HandleChargeRefundedAsync(payment);
@@ -200,8 +121,21 @@ public class PaymentService : IPaymentService
 
     private async Task HandlePaymentSucceededAsync(Payment payment)
     {
+        if (payment.Status == PaymentStatus.Completed)
+        {
+            // The vendor-accept flow already captured and recorded this synchronously — the common case.
+            // Re-processing here would just re-send "payment successful" notifications, so no-op.
+            return;
+        }
+
+        // Only reachable when the payment was still Authorized: AcceptBookingRequestAsync's Stripe capture
+        // succeeded but its DB transaction failed and rolled back (see the LogCritical there). This webhook
+        // is the durable backstop that reconciles Payment/BookingPaymentStatus; BookingRequest.Status itself
+        // is NOT touched here and may still be stuck at Pending — flagged below for manual follow-up.
+        var wasReconciliation = payment.Status == PaymentStatus.Authorized;
+
         payment.Status = PaymentStatus.Completed;
-        payment.PaidAt = DateTimeOffset.UtcNow;
+        payment.PaidAt ??= DateTimeOffset.UtcNow;
         _unitOfWork.Repository<Payment, long>().Update(payment);
 
         var bookingRepo = _unitOfWork.Repository<BookingRequest, long>();
@@ -211,6 +145,15 @@ public class PaymentService : IPaymentService
             booking.PaymentStatus = BookingPaymentStatus.Paid;
             booking.UpdatedAt = DateTimeOffset.UtcNow;
             bookingRepo.Update(booking);
+
+            if (wasReconciliation && booking.Status != BookingStatus.Accepted)
+            {
+                _logger.LogCritical(
+                    "RECONCILIATION NEEDED: PaymentIntent {PaymentIntentId} succeeded per Stripe webhook but " +
+                    "BookingRequest {BookingRequestId} is still '{Status}', not Accepted. PaymentStatus has been " +
+                    "reconciled to Paid; BookingRequest.Status needs manual review.",
+                    payment.GatewayReference, booking.Id, booking.Status);
+            }
         }
 
         await _unitOfWork.SaveChangesAsync();
@@ -251,6 +194,21 @@ public class PaymentService : IPaymentService
                 "Payment failed",
                 "Your payment could not be processed. Please try again."));
         }
+    }
+
+    private async Task HandlePaymentCanceledAsync(Payment payment)
+    {
+        if (payment.Status is PaymentStatus.Cancelled or PaymentStatus.Completed or PaymentStatus.Refunded)
+        {
+            // Already reconciled locally by our own void call (the common case), or a stale/out-of-order
+            // event for a payment that has since moved past Authorized — nothing to do either way.
+            return;
+        }
+
+        payment.Status = PaymentStatus.Cancelled;
+        payment.CancelledAt = DateTimeOffset.UtcNow;
+        _unitOfWork.Repository<Payment, long>().Update(payment);
+        await _unitOfWork.SaveChangesAsync();
     }
 
     private async Task HandleChargeRefundedAsync(Payment payment)
@@ -295,7 +253,4 @@ public class PaymentService : IPaymentService
             // Notifications are best-effort and must never fail webhook processing.
         }
     }
-
-    private static long ConvertToSmallestUnit(decimal amount)
-        => Convert.ToInt64(Math.Round(amount * 100m, MidpointRounding.AwayFromZero));
 }
