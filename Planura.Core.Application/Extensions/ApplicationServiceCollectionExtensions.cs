@@ -20,6 +20,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IVendorAvailabilityService, VendorAvailabilityService>();
         services.AddScoped<IVendorVerificationService, VendorVerificationService>();
         services.AddScoped<IVendorService, VendorService>();
+        services.AddScoped<IClientService, ClientService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<IEventPlanService, EventPlanService>();
