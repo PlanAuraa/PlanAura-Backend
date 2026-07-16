@@ -42,7 +42,8 @@ public class PaymentServiceTests
             PublishableKey = "pk_test_x",
             WebhookSecret = "whsec_x",
             DefaultCurrency = "EGP"
-        }));
+        }),
+        NullLogger<PaymentService>.Instance);
 
     private static Client CreateClient() => new() { Id = ClientId, UserId = ClientUserId };
 
@@ -64,7 +65,7 @@ public class PaymentServiceTests
 
     private static Payment CreatePayment(
         long id = 1,
-        PaymentStatus status = PaymentStatus.Pending,
+        PaymentStatus status = PaymentStatus.Authorized,
         string? gatewayReference = "pi_123") => new()
     {
         Id = id,
@@ -80,191 +81,6 @@ public class PaymentServiceTests
     {
         var repo = _unitOfWorkMock.SetupRepository<Client, long>();
         repo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(client);
-    }
-
-    // ---------------- GetPaymentOptionsAsync ----------------
-
-    [Fact]
-    public async Task GetPaymentOptionsAsync_BookingNotFound_ThrowsNotFound()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync((BookingRequest?)null);
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<NotFoundExeption>(() => service.GetPaymentOptionsAsync(BookingRequestId, ClientUserId));
-    }
-
-    [Fact]
-    public async Task GetPaymentOptionsAsync_NotAcceptedYet_IsPayableFalse()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking(status: BookingStatus.Pending));
-
-        var service = CreateService();
-        var result = await service.GetPaymentOptionsAsync(BookingRequestId, ClientUserId);
-
-        Assert.False(result.IsPayable);
-    }
-
-    [Fact]
-    public async Task GetPaymentOptionsAsync_AcceptedAndUnpaid_IsPayableTrue()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking());
-
-        var service = CreateService();
-        var result = await service.GetPaymentOptionsAsync(BookingRequestId, ClientUserId);
-
-        Assert.True(result.IsPayable);
-        Assert.Equal(5000m, result.AmountDue);
-        Assert.Equal("pk_test_x", result.PublishableKey);
-    }
-
-    // ---------------- InitiatePaymentAsync ----------------
-
-    [Fact]
-    public async Task InitiatePaymentAsync_BookingOwnedByAnotherClient_ThrowsNotFound()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking(clientId: 999));
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<NotFoundExeption>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_NotAccepted_ThrowsBadRequest()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking(status: BookingStatus.Pending));
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_AlreadyPaid_ThrowsBadRequest()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId))
-            .ReturnsAsync(CreateBooking(paymentStatus: BookingPaymentStatus.Paid));
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_NoAgreedPrice_ThrowsBadRequest()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking(agreedPrice: null));
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_ExistingPendingPayment_ThrowsBadRequest()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking());
-
-        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
-        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>()))
-            .ReturnsAsync(CreatePayment());
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_Valid_CreatesPaymentAndReturnsClientSecret()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking());
-
-        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
-        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync((Payment?)null);
-
-        Payment? captured = null;
-        paymentRepo.Setup(r => r.AddAsync(It.IsAny<Payment>()))
-            .Callback<Payment>(p =>
-            {
-                p.Id = 77;
-                captured = p;
-            })
-            .Returns(Task.CompletedTask);
-
-        _paymentGatewayServiceMock
-            .Setup(g => g.CreatePaymentIntentAsync(It.IsAny<CreatePaymentIntentRequest>()))
-            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_abc", ClientSecret = "secret_abc" });
-
-        var service = CreateService();
-        var result = await service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto());
-
-        Assert.NotNull(captured);
-        Assert.Equal(PaymentStatus.Pending, captured!.Status);
-        Assert.Equal("pi_abc", captured.GatewayReference);
-        Assert.Equal("secret_abc", result.ClientSecret);
-        Assert.Equal(5000m, result.Amount);
-        Assert.Equal("EGP", result.Currency);
-
-        _paymentGatewayServiceMock.Verify(g => g.CreatePaymentIntentAsync(It.Is<CreatePaymentIntentRequest>(
-            r => r.AmountInSmallestUnit == 500000
-                && r.Currency == "egp"
-                && r.Metadata["booking_request_id"] == BookingRequestId.ToString()
-                && r.Metadata["payment_id"] == "77")), Times.Once);
-    }
-
-    [Fact]
-    public async Task InitiatePaymentAsync_GatewayThrows_MarksPaymentFailedAndRethrows()
-    {
-        SetupClientRepo(CreateClient());
-        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
-        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(CreateBooking());
-
-        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
-        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync((Payment?)null);
-
-        Payment? captured = null;
-        paymentRepo.Setup(r => r.AddAsync(It.IsAny<Payment>()))
-            .Callback<Payment>(p =>
-            {
-                p.Id = 77;
-                captured = p;
-            })
-            .Returns(Task.CompletedTask);
-
-        _paymentGatewayServiceMock
-            .Setup(g => g.CreatePaymentIntentAsync(It.IsAny<CreatePaymentIntentRequest>()))
-            .ThrowsAsync(new InvalidOperationException("Stripe unreachable"));
-
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.InitiatePaymentAsync(BookingRequestId, ClientUserId, new InitiatePaymentDto()));
-
-        Assert.Equal(PaymentStatus.Failed, captured!.Status);
     }
 
     // ---------------- HandleStripeWebhookAsync ----------------
@@ -296,7 +112,7 @@ public class PaymentServiceTests
         var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
         paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
 
-        var booking = CreateBooking();
+        var booking = CreateBooking(status: BookingStatus.Accepted);
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(booking);
 
@@ -320,6 +136,56 @@ public class PaymentServiceTests
     }
 
     [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentSucceeded_AlreadyCompleted_NoOpDoesNotDuplicateNotifications()
+    {
+        var payment = CreatePayment(status: PaymentStatus.Completed);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.succeeded", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentSucceeded_ReconciliationPath_StillMarksPaidEvenIfBookingNotAccepted()
+    {
+        // Simulates AcceptBookingRequestAsync's capture succeeding but its DB write failing/rolling back:
+        // Payment is still Authorized and BookingRequest.Status is still Pending when the webhook arrives.
+        var payment = CreatePayment(status: PaymentStatus.Authorized);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.succeeded", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var booking = CreateBooking(status: BookingStatus.Pending);
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(booking);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(new Vendor { Id = VendorId, UserId = VendorUserId, BusinessName = "V" });
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        Assert.Equal(PaymentStatus.Completed, payment.Status);
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+        Assert.Equal(BookingStatus.Pending, booking.Status); // NOT auto-fixed — flagged via LogCritical for manual review
+    }
+
+    [Fact]
     public async Task HandleStripeWebhookAsync_PaymentFailed_MarksPaymentFailed()
     {
         var payment = CreatePayment();
@@ -339,6 +205,99 @@ public class PaymentServiceTests
         Assert.Equal(PaymentStatus.Failed, payment.Status);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             ClientUserId, "payment_failed", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentCanceled_MarksPaymentCancelled()
+    {
+        var payment = CreatePayment(status: PaymentStatus.Authorized);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.canceled", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        Assert.Equal(PaymentStatus.Cancelled, payment.Status);
+        Assert.NotNull(payment.CancelledAt);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentCanceled_AlreadyCancelledLocally_NoOp()
+    {
+        var payment = CreatePayment(status: PaymentStatus.Cancelled);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.canceled", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentCanceled_AlreadyCaptured_IgnoredAsStaleEvent()
+    {
+        var payment = CreatePayment(status: PaymentStatus.Completed);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.canceled", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        Assert.Equal(PaymentStatus.Completed, payment.Status);
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_AmountCapturableUpdated_ExistingPayment_NoOp()
+    {
+        var payment = CreatePayment(status: PaymentStatus.Authorized);
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.amount_capturable_updated", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        Assert.Equal(PaymentStatus.Authorized, payment.Status);
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_AmountCapturableUpdated_NoMatchingPayment_LogsButDoesNotThrow()
+    {
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent
+            {
+                Type = "payment_intent.amount_capturable_updated",
+                PaymentIntentId = "pi_orphaned",
+                Metadata = new Dictionary<string, string> { ["client_id"] = "10", ["vendor_id"] = "20" }
+            });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync((Payment?)null);
+
+        var service = CreateService();
+        var exception = await Record.ExceptionAsync(() => service.HandleStripeWebhookAsync("json", "sig"));
+
+        Assert.Null(exception);
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
     }
 
     [Fact]
@@ -375,7 +334,7 @@ public class PaymentServiceTests
         var service = CreateService();
         await service.HandleStripeWebhookAsync("json", "sig");
 
-        Assert.Equal(PaymentStatus.Pending, payment.Status);
+        Assert.Equal(PaymentStatus.Authorized, payment.Status);
     }
 
     [Fact]

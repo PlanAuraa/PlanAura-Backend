@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
@@ -10,11 +12,19 @@ public class BookingHoldExpiryJob : IBookingHoldExpiryJob
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly INotificationService _notificationService;
+    private readonly IPaymentGatewayService _paymentGatewayService;
+    private readonly ILogger<BookingHoldExpiryJob> _logger;
 
-    public BookingHoldExpiryJob(IUnitOfWork unitOfWork, INotificationService notificationService)
+    public BookingHoldExpiryJob(
+        IUnitOfWork unitOfWork,
+        INotificationService notificationService,
+        IPaymentGatewayService paymentGatewayService,
+        ILogger<BookingHoldExpiryJob> logger)
     {
         _unitOfWork = unitOfWork;
         _notificationService = notificationService;
+        _paymentGatewayService = paymentGatewayService;
+        _logger = logger;
     }
 
     public async Task RunAsync()
@@ -60,7 +70,43 @@ public class BookingHoldExpiryJob : IBookingHoldExpiryJob
                 throw;
             }
 
+            var payment = await _unitOfWork.Repository<Payment, long>()
+                .GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(booking.Id));
+            if (payment is not null)
+            {
+                await VoidAuthorizationBestEffortAsync(payment);
+            }
+
             await NotifyBothPartiesAsync(booking);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort void, mirroring BookingService's: no money has moved on an un-captured authorization, so a
+    /// failure here just means the hold releases naturally on Stripe's side instead of immediately.
+    /// </summary>
+    private async Task VoidAuthorizationBestEffortAsync(Payment payment)
+    {
+        try
+        {
+            await _paymentGatewayService.CancelPaymentIntentAsync(new CancelPaymentIntentRequest
+            {
+                PaymentIntentId = payment.GatewayReference!,
+                IdempotencyKey = $"void-{payment.Id}"
+            });
+
+            payment.Status = PaymentStatus.Cancelled;
+            payment.CancelledAt = DateTimeOffset.UtcNow;
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+            await _unitOfWork.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to void Stripe authorization for PaymentIntent {PaymentIntentId} (hold expired, vendor " +
+                "did not respond). The hold will still expire naturally on Stripe's side; Payment {PaymentId} " +
+                "remains marked Authorized locally until reconciled.",
+                payment.GatewayReference, payment.Id);
         }
     }
 

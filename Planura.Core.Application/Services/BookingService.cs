@@ -1,5 +1,7 @@
 using AutoMapper;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Specifications;
@@ -22,18 +24,27 @@ public class BookingService : IBookingService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IMapper _mapper;
     private readonly INotificationService _notificationService;
+    private readonly IPaymentGatewayService _paymentGatewayService;
     private readonly BookingOptions _bookingOptions;
+    private readonly StripeOptions _stripeOptions;
+    private readonly ILogger<BookingService> _logger;
 
     public BookingService(
         IUnitOfWork unitOfWork,
         IMapper mapper,
         INotificationService notificationService,
-        IOptions<BookingOptions> bookingOptions)
+        IPaymentGatewayService paymentGatewayService,
+        IOptions<BookingOptions> bookingOptions,
+        IOptions<StripeOptions> stripeOptions,
+        ILogger<BookingService> logger)
     {
         _unitOfWork = unitOfWork;
         _mapper = mapper;
         _notificationService = notificationService;
+        _paymentGatewayService = paymentGatewayService;
         _bookingOptions = bookingOptions.Value;
+        _stripeOptions = stripeOptions.Value;
+        _logger = logger;
     }
 
     public async Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto)
@@ -89,6 +100,40 @@ public class BookingService : IBookingService
             agreedPrice = package.BasePrice;
         }
 
+        if (agreedPrice is null or <= 0)
+        {
+            throw new BadRequestExeption("A package must be selected so a price can be authorized for this booking.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dto.PaymentMethodId))
+        {
+            throw new BadRequestExeption("A payment method is required to submit a booking request.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dto.RequestId))
+        {
+            throw new BadRequestExeption("A request id is required to submit a booking request.");
+        }
+
+        // Authorize the card hold before touching the database: if this fails (declined, insufficient
+        // funds, etc.) no booking request or payment row is ever created — see the option (b) status
+        // model discussion. The only failure window left is between this call succeeding and the
+        // transaction below committing, which is handled with a compensating cancel in the catch blocks.
+        var intentResult = await _paymentGatewayService.AuthorizePaymentIntentAsync(new AuthorizePaymentIntentRequest
+        {
+            AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(agreedPrice.Value),
+            Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
+            PaymentMethodId = dto.PaymentMethodId,
+            IdempotencyKey = dto.RequestId,
+            Metadata = new Dictionary<string, string>
+            {
+                ["client_id"] = clientId.ToString(),
+                ["vendor_id"] = vendor.Id.ToString(),
+                ["event_plan_id"] = dto.EventPlanId.ToString(),
+                ["availability_id"] = dto.AvailabilityId.ToString()
+            }
+        });
+
         var booking = new BookingRequest
         {
             EventPlanId = dto.EventPlanId,
@@ -103,10 +148,23 @@ public class BookingService : IBookingService
             PaymentStatus = BookingPaymentStatus.Unpaid
         };
 
+        var payment = new Payment
+        {
+            ClientId = clientId,
+            VendorId = vendor.Id,
+            Amount = agreedPrice.Value,
+            Status = PaymentStatus.Authorized,
+            PaymentMethod = dto.PaymentMethodId,
+            GatewayReference = intentResult.PaymentIntentId,
+            AuthorizedAt = DateTimeOffset.UtcNow,
+            BookingRequest = booking
+        };
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
             await _unitOfWork.Repository<BookingRequest, long>().AddAsync(booking);
+            await _unitOfWork.Repository<Payment, long>().AddAsync(payment);
 
             slot.Status = AvailabilityStatus.Held;
             slot.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(_bookingOptions.HoldTtlHours);
@@ -128,12 +186,14 @@ public class BookingService : IBookingService
         catch (Exception ex) when (IsSlotConflict(ex))
         {
             await _unitOfWork.RollbackTransactionAsync();
+            await CompensateAuthorizationAsync(intentResult.PaymentIntentId, dto.RequestId);
             throw new SlotUnavailableExeption(
                 $"Slot {dto.AvailabilityId} was just taken by another booking request.");
         }
         catch
         {
             await _unitOfWork.RollbackTransactionAsync();
+            await CompensateAuthorizationAsync(intentResult.PaymentIntentId, dto.RequestId);
             throw;
         }
 
@@ -144,6 +204,32 @@ public class BookingService : IBookingService
             $"You have a new booking request for {booking.EventDate:d}."));
 
         return _mapper.Map<BookingRequestDto>(booking);
+    }
+
+    /// <summary>
+    /// Best-effort void of a just-created authorization when the DB write that was supposed to record it
+    /// fails. Failure to compensate is logged as a distinct, alertable event rather than swallowed, since
+    /// it leaves an authorized-but-unrecorded PaymentIntent that needs manual reconciliation in Stripe.
+    /// </summary>
+    private async Task CompensateAuthorizationAsync(string paymentIntentId, string requestId)
+    {
+        try
+        {
+            await _paymentGatewayService.CancelPaymentIntentAsync(new CancelPaymentIntentRequest
+            {
+                PaymentIntentId = paymentIntentId,
+                IdempotencyKey = $"compensate-{requestId}",
+                CancellationReason = "abandoned"
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex,
+                "ORPHANED STRIPE AUTHORIZATION: failed to compensate-cancel PaymentIntent {PaymentIntentId} " +
+                "after its booking request DB write failed (RequestId {RequestId}). This authorization must " +
+                "be reconciled manually in Stripe to avoid an unintended capture.",
+                paymentIntentId, requestId);
+        }
     }
 
     public async Task<BookingRequestDto> CancelBookingRequestAsync(long bookingRequestId, long clientUserId)
@@ -196,6 +282,13 @@ public class BookingService : IBookingService
             throw;
         }
 
+        var authorizedPayment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(bookingRequestId));
+        if (authorizedPayment is not null)
+        {
+            await VoidAuthorizationBestEffortAsync(authorizedPayment, "booking cancelled by client");
+        }
+
         var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
         if (vendor is not null)
         {
@@ -207,6 +300,249 @@ public class BookingService : IBookingService
         }
 
         return _mapper.Map<BookingRequestDto>(booking);
+    }
+
+    public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId)
+    {
+        var vendorId = await ResolveVendorIdAsync(vendorUserId);
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || booking.VendorId != vendorId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.Status != BookingStatus.Pending)
+        {
+            throw new BadRequestExeption(
+                $"Cannot accept a booking request with status '{booking.Status}'. Only pending requests can be accepted.");
+        }
+
+        var paymentRepo = _unitOfWork.Repository<Payment, long>();
+        var payment = await paymentRepo.GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(bookingRequestId));
+        if (payment is null)
+        {
+            throw new BadRequestExeption("No authorized payment was found for this booking request; it cannot be accepted.");
+        }
+
+        try
+        {
+            var captureResult = await _paymentGatewayService.CapturePaymentIntentAsync(new CapturePaymentIntentRequest
+            {
+                PaymentIntentId = payment.GatewayReference!,
+                IdempotencyKey = $"capture-{payment.Id}"
+            });
+
+            if (captureResult.Status != "succeeded")
+            {
+                throw new InvalidOperationException($"Unexpected PaymentIntent status after capture: {captureResult.Status}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "CAPTURE FAILED: PaymentIntent {PaymentIntentId} for booking request {BookingRequestId} could not be " +
+                "captured on vendor accept. Auto-declining the booking.",
+                payment.GatewayReference, bookingRequestId);
+
+            await AutoDeclineAfterCaptureFailureAsync(booking, payment);
+
+            throw new PaymentDeclinedExeption(
+                "The client's payment could not be captured, so this booking request was automatically declined. " +
+                "Ask the client to submit a new request with a valid payment method.");
+        }
+
+        var previousStatus = booking.Status;
+        booking.Status = BookingStatus.Accepted;
+        booking.PaymentStatus = BookingPaymentStatus.Paid;
+        booking.RespondedAt = DateTimeOffset.UtcNow;
+        booking.UpdatedAt = DateTimeOffset.UtcNow;
+
+        payment.Status = PaymentStatus.Completed;
+        payment.PaidAt = DateTimeOffset.UtcNow;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+            paymentRepo.Update(payment);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(bookingRequestId));
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Booked;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = bookingRequestId,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Accepted.ToString(),
+                ChangedByUserId = vendorUserId,
+                Notes = "Accepted by vendor; payment captured."
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+
+            // The Stripe capture above already succeeded — the client has been charged — but the DB write
+            // recording it failed and was rolled back. This is NOT safe to silently retry or reverse here:
+            // no automatic refund is attempted. The payment_intent.succeeded webhook (fired regardless of
+            // this DB outcome) is expected to reconcile Payment/BookingRequest state; this log is the signal
+            // to verify that reconciliation actually happened if it doesn't self-heal.
+            _logger.LogCritical(ex,
+                "DB WRITE FAILED AFTER SUCCESSFUL CAPTURE: PaymentIntent {PaymentIntentId} for booking request " +
+                "{BookingRequestId} was captured in Stripe but the DB transaction recording Accepted/Paid failed " +
+                "and was rolled back. Verify the payment_intent.succeeded webhook reconciles this.",
+                payment.GatewayReference, bookingRequestId);
+            throw;
+        }
+
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
+        if (client is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                client.UserId,
+                NotificationTypes.BookingAccepted,
+                "Booking request accepted",
+                $"Your booking request for {booking.EventDate:d} was accepted and your payment has been processed."));
+        }
+
+        return _mapper.Map<BookingRequestDto>(booking);
+    }
+
+    public async Task<BookingRequestDto> RejectBookingRequestAsync(long bookingRequestId, long vendorUserId, string? reason)
+    {
+        var vendorId = await ResolveVendorIdAsync(vendorUserId);
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || booking.VendorId != vendorId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.Status != BookingStatus.Pending)
+        {
+            throw new BadRequestExeption(
+                $"Cannot reject a booking request with status '{booking.Status}'. Only pending requests can be rejected.");
+        }
+
+        var previousStatus = booking.Status;
+        booking.Status = BookingStatus.Rejected;
+        booking.VendorResponse = reason;
+        booking.RespondedAt = DateTimeOffset.UtcNow;
+        booking.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(bookingRequestId));
+            holdRepo.DeleteRange(holds);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = bookingRequestId,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Rejected.ToString(),
+                ChangedByUserId = vendorUserId,
+                Notes = string.IsNullOrWhiteSpace(reason) ? "Rejected by vendor." : $"Rejected by vendor: {reason}"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(bookingRequestId));
+        if (payment is not null)
+        {
+            await VoidAuthorizationBestEffortAsync(payment, "booking rejected by vendor");
+        }
+
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
+        if (client is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                client.UserId,
+                NotificationTypes.BookingRejected,
+                "Booking request declined",
+                $"The vendor declined your booking request for {booking.EventDate:d}."));
+        }
+
+        return _mapper.Map<BookingRequestDto>(booking);
+    }
+
+    private async Task AutoDeclineAfterCaptureFailureAsync(BookingRequest booking, Payment payment)
+    {
+        var previousStatus = booking.Status;
+        booking.Status = BookingStatus.Rejected;
+        booking.VendorResponse = "Automatically declined: payment capture failed.";
+        booking.RespondedAt = DateTimeOffset.UtcNow;
+        booking.UpdatedAt = DateTimeOffset.UtcNow;
+
+        payment.Status = PaymentStatus.Failed;
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var paymentRepo = _unitOfWork.Repository<Payment, long>();
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+            paymentRepo.Update(payment);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(booking.Id));
+            holdRepo.DeleteRange(holds);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Rejected.ToString(),
+                ChangedByUserId = null,
+                Notes = "auto-declined: payment capture failed on vendor accept"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
+        if (client is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                client.UserId,
+                NotificationTypes.BookingRejected,
+                "Booking request declined",
+                $"Your payment could not be completed for the booking request on {booking.EventDate:d}, so it was " +
+                "automatically declined. Please submit a new request with a valid payment method."));
+        }
     }
 
     public async Task<BookingRequestDto> GetBookingRequestAsync(long bookingRequestId, long clientUserId)
@@ -307,6 +643,49 @@ public class BookingService : IBookingService
         }
 
         return client.Id;
+    }
+
+    private async Task<long> ResolveVendorIdAsync(long userId)
+    {
+        var vendor = await _unitOfWork.Repository<Vendor, long>()
+            .GetWithSpecAsync(new VendorByUserIdSpecification(userId));
+
+        if (vendor is null)
+        {
+            throw new NotFoundExeption(nameof(Vendor), userId);
+        }
+
+        return vendor.Id;
+    }
+
+    /// <summary>
+    /// Best-effort void of an authorized-but-not-yet-captured PaymentIntent when a booking request is
+    /// rejected, cancelled, or expires. Unlike the capture path, a failure here is low-stakes: no money has
+    /// moved, and Stripe releases an un-captured authorization hold on its own after its expiry window, so a
+    /// failed void here is logged as a warning (for reconciliation/cleanup) rather than blocking the caller.
+    /// </summary>
+    private async Task VoidAuthorizationBestEffortAsync(Payment payment, string context)
+    {
+        try
+        {
+            await _paymentGatewayService.CancelPaymentIntentAsync(new CancelPaymentIntentRequest
+            {
+                PaymentIntentId = payment.GatewayReference!,
+                IdempotencyKey = $"void-{payment.Id}"
+            });
+
+            payment.Status = PaymentStatus.Cancelled;
+            payment.CancelledAt = DateTimeOffset.UtcNow;
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+            await _unitOfWork.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to void Stripe authorization for PaymentIntent {PaymentIntentId} ({Context}). The hold will " +
+                "still expire naturally on Stripe's side; Payment {PaymentId} remains marked Authorized locally until reconciled.",
+                payment.GatewayReference, context, payment.Id);
+        }
     }
 
     private static async Task NotifyBestEffortAsync(Func<Task> notify)

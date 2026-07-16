@@ -25,8 +25,6 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IEventPlanService, EventPlanService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
-        services.AddScoped<IPaymentDeadlineJob, PaymentDeadlineJob>();
-        services.AddScoped<IPaymentReminderJob, PaymentReminderJob>();
         return services;
     }
 }

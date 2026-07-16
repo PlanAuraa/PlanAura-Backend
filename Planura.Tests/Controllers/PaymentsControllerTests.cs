@@ -24,51 +24,6 @@ public class PaymentsControllerTests
     }
 
     [Fact]
-    public async Task GetPaymentOptions_Valid_ReturnsOk()
-    {
-        var expected = new PaymentOptionsDto { BookingRequestId = 1, IsPayable = true };
-        _paymentServiceMock
-            .Setup(s => s.GetPaymentOptionsAsync(1, CurrentUserId))
-            .ReturnsAsync(expected);
-
-        var controller = CreateController();
-        var result = await controller.GetPaymentOptions(1);
-
-        var okResult = Assert.IsType<OkObjectResult>(result.Result);
-        Assert.Equal(expected, okResult.Value);
-    }
-
-    [Fact]
-    public async Task InitiatePayment_Valid_ReturnsOk()
-    {
-        var dto = new InitiatePaymentDto();
-        var expected = new InitiatePaymentResultDto { PaymentId = 1, ClientSecret = "secret" };
-
-        _paymentServiceMock
-            .Setup(s => s.InitiatePaymentAsync(1, CurrentUserId, dto))
-            .ReturnsAsync(expected);
-
-        var controller = CreateController();
-        var result = await controller.InitiatePayment(1, dto);
-
-        var okResult = Assert.IsType<OkObjectResult>(result.Result);
-        Assert.Equal(expected, okResult.Value);
-    }
-
-    [Fact]
-    public async Task InitiatePayment_NotAccepted_PropagatesException()
-    {
-        var dto = new InitiatePaymentDto();
-        _paymentServiceMock
-            .Setup(s => s.InitiatePaymentAsync(1, CurrentUserId, dto))
-            .ThrowsAsync(new BadRequestExeption("Cannot initiate payment."));
-
-        var controller = CreateController();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(() => controller.InitiatePayment(1, dto));
-    }
-
-    [Fact]
     public async Task MyTransactions_Valid_ReturnsOk()
     {
         var filter = new TransactionsFilterDto();
@@ -83,6 +38,15 @@ public class PaymentsControllerTests
 
         var okResult = Assert.IsType<OkObjectResult>(result.Result);
         Assert.Equal(expected, okResult.Value);
+    }
+
+    [Fact]
+    public async Task MyTransactions_NoAuthenticatedUser_ThrowsUnAuthorized()
+    {
+        _currentUserServiceMock.Setup(c => c.UserId).Returns((long?)null);
+        var controller = new PaymentsController(_paymentServiceMock.Object, _currentUserServiceMock.Object);
+
+        await Assert.ThrowsAsync<UnAuthorizedExeption>(() => controller.MyTransactions(new TransactionsFilterDto()));
     }
 
     [Fact]
@@ -122,14 +86,5 @@ public class PaymentsControllerTests
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
 
         await Assert.ThrowsAsync<BadRequestExeption>(() => controller.StripeWebhook());
-    }
-
-    [Fact]
-    public async Task GetPaymentOptions_NoAuthenticatedUser_ThrowsUnAuthorized()
-    {
-        _currentUserServiceMock.Setup(c => c.UserId).Returns((long?)null);
-        var controller = new PaymentsController(_paymentServiceMock.Object, _currentUserServiceMock.Object);
-
-        await Assert.ThrowsAsync<UnAuthorizedExeption>(() => controller.GetPaymentOptions(1));
     }
 }

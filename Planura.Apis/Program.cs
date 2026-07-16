@@ -88,16 +88,6 @@ using (var scope = app.Services.CreateScope())
         "booking-hold-expiry",
         job => job.RunAsync(),
         "*/15 * * * *");
-
-    recurringJobs.AddOrUpdate<IPaymentDeadlineJob>(
-        "payment-deadline",
-        job => job.RunAsync(),
-        "*/15 * * * *");
-
-    recurringJobs.AddOrUpdate<IPaymentReminderJob>(
-        "payment-reminder",
-        job => job.RunAsync(),
-        "*/15 * * * *");
 }
 
 

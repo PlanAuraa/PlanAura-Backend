@@ -24,22 +24,6 @@ public class PaymentsController : ControllerBase
         ?? throw new UnAuthorizedExeption("No authenticated user.");
 
     [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
-    [HttpGet("/api/booking-requests/{id:long}/payment-options")]
-    public async Task<ActionResult<PaymentOptionsDto>> GetPaymentOptions(long id)
-    {
-        var result = await _paymentService.GetPaymentOptionsAsync(id, CurrentUserId);
-        return Ok(result);
-    }
-
-    [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
-    [HttpPost("/api/booking-requests/{id:long}/payments")]
-    public async Task<ActionResult<InitiatePaymentResultDto>> InitiatePayment(long id, [FromBody] InitiatePaymentDto dto)
-    {
-        var result = await _paymentService.InitiatePaymentAsync(id, CurrentUserId, dto);
-        return Ok(result);
-    }
-
-    [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
     [HttpGet("my-transactions")]
     public async Task<ActionResult<PagedResult<PaymentDto>>> MyTransactions([FromQuery] TransactionsFilterDto filter)
     {

@@ -12,7 +12,9 @@ public class Payment
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
     public string? PaymentMethod { get; set; }
     public string? GatewayReference { get; set; }
+    public DateTimeOffset? AuthorizedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
+    public DateTimeOffset? CancelledAt { get; set; }
     public DateTimeOffset? RefundedAt { get; set; }
     public string? RefundReason { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

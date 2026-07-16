@@ -85,6 +85,14 @@ namespace Planura.Apis.MiddleWares
                         await httpContext.Response.WriteAsync(response.ToString());
 
                         break;
+                    case PaymentDeclinedExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.PaymentRequired;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.PaymentRequired, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
                     case UnAuthorizedExeption:
 
                         httpContext.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
