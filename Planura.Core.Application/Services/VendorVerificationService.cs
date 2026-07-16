@@ -181,6 +181,8 @@ public class VendorVerificationService : IVendorVerificationService
         {
             VendorId = vendor.Id,
             VendorName = vendor.User.FullName,
+            Email = vendor.User.Email,
+            PhoneNumber = vendor.User.PhoneNumber,
             BusinessName = vendor.BusinessName,
             BusinessDescription = vendor.BusinessDescription,
             VendorType = vendor.VendorType,

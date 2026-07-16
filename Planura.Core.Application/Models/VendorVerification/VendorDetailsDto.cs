@@ -13,6 +13,10 @@ namespace Planura.Core.Application.Models.VendorVerification
 
         public string VendorName { get; set; } = null!;
 
+        public string? Email { get; set; }
+
+        public string? PhoneNumber { get; set; }
+
         public string BusinessName { get; set; } = null!;
 
         public string? BusinessDescription { get; set; }
