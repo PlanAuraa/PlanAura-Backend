@@ -30,6 +30,8 @@ public class PlanuraDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     public DbSet<ReviewResponse> ReviewResponses => Set<ReviewResponse>();
     public DbSet<AiEventVisualization> AiEventVisualizations => Set<AiEventVisualization>();
     public DbSet<AiInvitation> AiInvitations => Set<AiInvitation>();
+    public DbSet<AiChatConversation> AiChatConversations => Set<AiChatConversation>();
+    public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
     public DbSet<PortfolioMedia> PortfolioMedia => Set<PortfolioMedia>();
     public DbSet<PortfolioLink> PortfolioLinks => Set<PortfolioLink>();
     public DbSet<Notification> Notifications => Set<Notification>();

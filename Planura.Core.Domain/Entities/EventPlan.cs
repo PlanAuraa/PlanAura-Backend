@@ -25,4 +25,5 @@ public class EventPlan
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<AiEventVisualization> AiEventVisualizations { get; set; } = new List<AiEventVisualization>();
     public ICollection<AiInvitation> AiInvitations { get; set; } = new List<AiInvitation>();
+    public ICollection<AiChatConversation> AiChatConversations { get; set; } = new List<AiChatConversation>();
 }

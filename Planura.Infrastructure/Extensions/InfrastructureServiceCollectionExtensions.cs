@@ -12,7 +12,9 @@ using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Infrastructure.Authorization;
 using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Abstraction.AiChat;
 using Planura.Core.Application.Abstraction.PaymentGateway;
+using Planura.Infrastructure.AiChat;
 using Planura.Infrastructure.AttachementService;
 using Planura.Infrastructure.Options;
 using Planura.Infrastructure.PaymentGateway;
@@ -33,6 +35,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAuthorizationHandler, ApprovedVendorHandler>();
         services.AddScoped<IAttachmentService, AttachmentService>();
         services.AddScoped<IPaymentGatewayService, StripePaymentGatewayService>();
+        services.AddScoped<IAiChatProvider, OpenAiChatProvider>();
         services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
