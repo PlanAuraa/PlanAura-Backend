@@ -35,7 +35,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAuthorizationHandler, ApprovedVendorHandler>();
         services.AddScoped<IAttachmentService, AttachmentService>();
         services.AddScoped<IPaymentGatewayService, StripePaymentGatewayService>();
-        services.AddScoped<IAiChatProvider, OpenAiChatProvider>();
+        services.AddHttpClient<IAiChatProvider, OpenAiChatProvider>();
         services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
