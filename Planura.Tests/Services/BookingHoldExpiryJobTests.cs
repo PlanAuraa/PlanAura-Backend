@@ -58,6 +58,7 @@ public class BookingHoldExpiryJobTests
         EndAt = new DateTimeOffset(2026, 8, 1, 14, 0, 0, TimeSpan.Zero),
         Status = AvailabilityStatus.Held,
         HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(-1),
+        BookingRequestId = booking?.Id,
         BookingRequest = booking
     };
 
@@ -92,7 +93,7 @@ public class BookingHoldExpiryJobTests
     }
 
     [Fact]
-    public async Task RunAsync_ExpiredHoldWithPendingBooking_ExpiresBookingDeletesHoldAndNotifiesBothParties()
+    public async Task RunAsync_ExpiredHoldWithPendingBooking_ExpiresBookingResetsHoldToAvailableAndNotifiesBothParties()
     {
         var booking = CreateBooking();
         var hold = CreateExpiredHold(booking);
@@ -123,7 +124,12 @@ public class BookingHoldExpiryJobTests
         await job.RunAsync();
 
         Assert.Equal(BookingStatus.Expired, booking.Status);
-        slotRepo.Verify(r => r.Delete(hold), Times.Once);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        Assert.Null(hold.BookingRequest);
+        Assert.Null(hold.HoldExpiresAt);
+        slotRepo.Verify(r => r.Update(hold), Times.Once);
+        slotRepo.Verify(r => r.Delete(It.IsAny<VendorAvailability>()), Times.Never);
 
         Assert.NotNull(capturedHistory);
         Assert.Equal("Pending", capturedHistory!.PreviousStatus);
@@ -176,6 +182,7 @@ public class BookingHoldExpiryJobTests
 
         Assert.Equal(BookingStatus.Expired, booking.Status);
         Assert.Equal(PaymentStatus.Authorized, payment.Status);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status); // hold reset still happens regardless of void outcome
 
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);

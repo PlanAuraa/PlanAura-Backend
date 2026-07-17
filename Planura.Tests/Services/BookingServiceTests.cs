@@ -717,7 +717,11 @@ public class BookingServiceTests
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
 
-        var holds = new List<VendorAvailability> { CreateSlot(status: AvailabilityStatus.Held) };
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        hold.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(24);
+        var holds = new List<VendorAvailability> { hold };
         var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
         slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
             .ReturnsAsync(holds);
@@ -740,7 +744,12 @@ public class BookingServiceTests
 
         Assert.Equal(BookingStatus.Cancelled, booking.Status);
         Assert.NotNull(booking.CancelledAt);
-        slotRepo.Verify(r => r.DeleteRange(holds), Times.Once);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        Assert.Null(hold.BookingRequest);
+        Assert.Null(hold.HoldExpiresAt);
+        slotRepo.Verify(r => r.Update(hold), Times.Once);
+        slotRepo.Verify(r => r.DeleteRange(It.IsAny<IEnumerable<VendorAvailability>>()), Times.Never);
         Assert.NotNull(capturedHistory);
         Assert.Equal("Pending", capturedHistory!.PreviousStatus);
         Assert.Equal("Cancelled", capturedHistory.NewStatus);
@@ -867,7 +876,7 @@ public class BookingServiceTests
     }
 
     [Fact]
-    public async Task AcceptBookingRequestAsync_CaptureFails_AutoDeclinesBookingAndThrowsPaymentDeclined()
+    public async Task AcceptBookingRequestAsync_CaptureFails_AutoDeclinesVoidsAuthorizationResetsHoldAndThrowsPaymentDeclined()
     {
         SetupVendorUserRepo(CreateVendor());
         var booking = CreateBooking();
@@ -882,9 +891,13 @@ public class BookingServiceTests
             .Setup(g => g.CapturePaymentIntentAsync(It.IsAny<CapturePaymentIntentRequest>()))
             .ThrowsAsync(new InvalidOperationException("card no longer valid"));
 
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        hold.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(24);
         var holdRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
         holdRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
-            .ReturnsAsync(new List<VendorAvailability>());
+            .ReturnsAsync(new List<VendorAvailability> { hold });
 
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
 
@@ -896,10 +909,65 @@ public class BookingServiceTests
         await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
 
         Assert.Equal(BookingStatus.Rejected, booking.Status);
-        Assert.Equal(PaymentStatus.Failed, payment.Status);
+
+        // BUG 1: the still-live authorization must actually be voided with Stripe, not just marked
+        // Failed locally — this is what left pi_3Tu1cdJTBgcTyrCL0osgfeOY orphaned on the test account.
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_capture_fail")), Times.Once);
+        Assert.Equal(PaymentStatus.Cancelled, payment.Status);
+
+        // BUG 2: the hold must be released back to Available, not deleted, so the slot is rebookable.
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        Assert.Null(hold.BookingRequest);
+        Assert.Null(hold.HoldExpiresAt);
+        holdRepo.Verify(r => r.Update(hold), Times.Once);
+        holdRepo.Verify(r => r.DeleteRange(It.IsAny<IEnumerable<VendorAvailability>>()), Times.Never);
+        holdRepo.Verify(r => r.Delete(It.IsAny<VendorAvailability>()), Times.Never);
+
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_CaptureFailsAndVoidAlsoFails_StillAutoDeclinesAndResetsHold()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var payment = CreateAuthorizedPayment("pi_capture_fail_void_fail");
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CapturePaymentIntentAsync(It.IsAny<CapturePaymentIntentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("card no longer valid"));
+        _paymentGatewayServiceMock
+            .Setup(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()))
+            .ThrowsAsync(new InvalidOperationException("stripe unreachable"));
+
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        var holdRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        holdRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+
+        Assert.Equal(BookingStatus.Rejected, booking.Status);
+        Assert.Equal(PaymentStatus.Failed, payment.Status); // void failed, so it stays at the pre-void Failed status
+        Assert.Equal(AvailabilityStatus.Available, hold.Status); // hold reset still happens regardless of void outcome
     }
 
     // ---------------- RejectBookingRequestAsync ----------------
@@ -948,7 +1016,11 @@ public class BookingServiceTests
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
         bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
 
-        var holds = new List<VendorAvailability> { CreateSlot(status: AvailabilityStatus.Held) };
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        hold.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(24);
+        var holds = new List<VendorAvailability> { hold };
         var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
         slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
             .ReturnsAsync(holds);
@@ -972,7 +1044,12 @@ public class BookingServiceTests
         Assert.Equal(BookingStatus.Rejected, booking.Status);
         Assert.Equal("Fully booked that day", booking.VendorResponse);
         Assert.NotNull(booking.RespondedAt);
-        slotRepo.Verify(r => r.DeleteRange(holds), Times.Once);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        Assert.Null(hold.BookingRequest);
+        Assert.Null(hold.HoldExpiresAt);
+        slotRepo.Verify(r => r.Update(hold), Times.Once);
+        slotRepo.Verify(r => r.DeleteRange(It.IsAny<IEnumerable<VendorAvailability>>()), Times.Never);
 
         Assert.NotNull(capturedHistory);
         Assert.Equal("Pending", capturedHistory!.PreviousStatus);
