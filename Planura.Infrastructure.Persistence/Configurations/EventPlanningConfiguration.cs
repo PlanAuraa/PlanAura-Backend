@@ -76,3 +76,41 @@ public class AiInvitationConfiguration : IEntityTypeConfiguration<AiInvitation>
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public class AiChatConversationConfiguration : IEntityTypeConfiguration<AiChatConversation>
+{
+    public void Configure(EntityTypeBuilder<AiChatConversation> builder)
+    {
+        builder.Property(conversation => conversation.Title).HasMaxLength(200);
+        builder.Property(conversation => conversation.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+        builder.Property(conversation => conversation.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        builder.HasOne(conversation => conversation.Client)
+            .WithMany(client => client.AiChatConversations)
+            .HasForeignKey(conversation => conversation.ClientId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Restrict (not SetNull): Client already cascades to both EventPlan and
+        // AiChatConversation directly, so a SetNull path through EventPlan would be a
+        // second cascade path to the same table, which SQL Server rejects outright.
+        builder.HasOne(conversation => conversation.EventPlan)
+            .WithMany(plan => plan.AiChatConversations)
+            .HasForeignKey(conversation => conversation.EventPlanId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public class AiChatMessageConfiguration : IEntityTypeConfiguration<AiChatMessage>
+{
+    public void Configure(EntityTypeBuilder<AiChatMessage> builder)
+    {
+        builder.Property(message => message.Role).HasMaxLength(20).IsRequired();
+        builder.Property(message => message.Content).IsRequired();
+        builder.Property(message => message.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        builder.HasOne(message => message.Conversation)
+            .WithMany(conversation => conversation.Messages)
+            .HasForeignKey(message => message.ConversationId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}

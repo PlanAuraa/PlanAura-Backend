@@ -23,5 +23,8 @@ public class MappingProfile : Profile
         CreateMap<EventPlan, EventPlanDto>();
 
         CreateMap<Payment, PaymentDto>();
+
+        CreateMap<AiChatMessage, AiChatMessageDto>();
+        CreateMap<AiChatConversation, AiChatConversationDto>();
     }
 }

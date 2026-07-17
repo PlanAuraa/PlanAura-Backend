@@ -29,7 +29,7 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions((option) =>
 
 builder.Services.AddCors(corsOptions =>
 {
-    corsOptions.AddPolicy("TalabatPolicy", policyBuilder =>
+    corsOptions.AddPolicy("PlanAuraPolicy", policyBuilder =>
     {
         policyBuilder.AllowAnyHeader()
                      .AllowAnyMethod()
@@ -107,7 +107,7 @@ app.UseHttpsRedirection();
 app.UseStatusCodePagesWithReExecute("/Errors/{0}");
 
 app.UseStaticFiles();
-app.UseCors("TalabatPolicy");
+app.UseCors("PlanAuraPolicy");
 
 
 app.UseAuthentication();

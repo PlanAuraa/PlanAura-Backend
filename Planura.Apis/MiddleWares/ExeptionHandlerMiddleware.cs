@@ -101,6 +101,38 @@ namespace Planura.Apis.MiddleWares
                         await httpContext.Response.WriteAsync(response.ToString());
 
                         break;
+                    case AiProviderRateLimitedExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.TooManyRequests;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.TooManyRequests, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
+                    case AiProviderTimeoutExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.GatewayTimeout;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.GatewayTimeout, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
+                    case AiContentPolicyExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.BadRequest, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
+                    case AiProviderUnavailableExeption:
+
+                        httpContext.Response.StatusCode = (int)HttpStatusCode.BadGateway;
+                        httpContext.Response.ContentType = "application/json";
+                        response = new ApiResponse((int)HttpStatusCode.BadGateway, ex.Message);
+                        await httpContext.Response.WriteAsync(response.ToString());
+
+                        break;
                     default:
                         var innerMessage = ex;
                         while (innerMessage.InnerException is not null)
