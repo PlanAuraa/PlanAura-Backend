@@ -13,6 +13,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddAutoMapper(cfg => { }, Assembly.GetExecutingAssembly());
         services.Configure<BookingOptions>(configuration.GetSection(BookingOptions.SectionName));
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
+        services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IAccountAdminService, AccountAdminService>();
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
@@ -25,6 +26,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<IEventPlanService, EventPlanService>();
         services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IAiChatService, AiChatService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
         return services;
     }

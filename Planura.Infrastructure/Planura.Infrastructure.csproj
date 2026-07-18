@@ -13,6 +13,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.17" />
     <PackageReference Include="Stripe.net" Version="52.1.0" />
+    <PackageReference Include="OpenAI" Version="2.*" />
   </ItemGroup>
 
   <ItemGroup>

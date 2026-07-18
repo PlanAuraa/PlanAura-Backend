@@ -14,4 +14,5 @@ public class Client
     public ICollection<EventPlan> EventPlans { get; set; } = new List<EventPlan>();
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
+    public ICollection<AiChatConversation> AiChatConversations { get; set; } = new List<AiChatConversation>();
 }
