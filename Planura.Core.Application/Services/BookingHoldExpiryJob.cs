@@ -50,7 +50,11 @@ public class BookingHoldExpiryJob : IBookingHoldExpiryJob
                 booking.UpdatedAt = now;
                 _unitOfWork.Repository<BookingRequest, long>().Update(booking);
 
-                _unitOfWork.Repository<VendorAvailability, long>().Delete(hold);
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                _unitOfWork.Repository<VendorAvailability, long>().Update(hold);
 
                 var history = new BookingStatusHistory
                 {
