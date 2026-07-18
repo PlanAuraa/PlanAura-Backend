@@ -46,7 +46,7 @@ public class VendorVerificationService : IVendorVerificationService
             }
 
             var verification = await verificationRepository
-                .GetWithSpecAsync(new Planura.Core.Application.Specifications.VendorVerification.CurrentVendorVerificationSpecification(vendorId));
+                .GetWithSpecAsync(new CurrentVendorVerificationSpecification(vendorId));
 
             if (verification is null)
             {
@@ -104,7 +104,7 @@ public class VendorVerificationService : IVendorVerificationService
             }
 
             var verification = await verificationRepository
-                .GetWithSpecAsync(new Planura.Core.Application.Specifications.VendorVerification.CurrentVendorVerificationSpecification(vendorId));
+                .GetWithSpecAsync(new CurrentVendorVerificationSpecification(vendorId));
 
             if (verification is null)
             {
@@ -131,6 +131,71 @@ public class VendorVerificationService : IVendorVerificationService
                 ChangedByAdminId = _currentUserService.UserId,
                 ChangedAt = DateTimeOffset.UtcNow,
                 Notes = rejectionReason
+            };
+
+            await historyRepository.AddAsync(history);
+
+            await _unitOfWork.SaveChangesAsync();
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+    }
+
+    public async Task PromoteToTrustedAsync(long vendorId)
+    {
+        await _unitOfWork.BeginTransactionAsync();
+
+        try
+        {
+            var vendorRepository = _unitOfWork.Repository<Vendor, long>();
+            var verificationRepository = _unitOfWork.Repository<VendorVerification, long>();
+            var historyRepository = _unitOfWork.Repository<VendorVerificationHistory, long>();
+
+            var vendor = await vendorRepository.GetAsync(vendorId);
+
+            if (vendor is null)
+            {
+                throw new NotFoundExeption(nameof(Vendor), vendorId);
+            }
+
+            var verification = await verificationRepository
+                .GetWithSpecAsync(new CurrentVendorVerificationSpecification(vendorId));
+
+            if (verification is null)
+            {
+                throw new NotFoundExeption(nameof(VendorVerification), vendorId);
+            }
+
+            if (verification.Status != VerificationStatus.Verified)
+            {
+                throw new BadRequestExeption(
+                    $"Only a verified vendor can be promoted to trusted (current status: '{verification.Status}').");
+            }
+
+            var previousStatus = verification.Status;
+
+            vendor.VerificationStatus = VerificationStatus.Trusted;
+
+            verification.Status = VerificationStatus.Trusted;
+            verification.TrustedSince = DateTimeOffset.UtcNow;
+            verification.ReviewedAt = DateTimeOffset.UtcNow;
+            verification.ReviewedByAdminId = _currentUserService.UserId;
+
+            vendorRepository.Update(vendor);
+            verificationRepository.Update(verification);
+
+            var history = new VendorVerificationHistory
+            {
+                VendorVerificationId = verification.Id,
+                PreviousStatus = previousStatus,
+                NewStatus = VerificationStatus.Trusted,
+                ChangedByAdminId = _currentUserService.UserId,
+                ChangedAt = DateTimeOffset.UtcNow,
+                Notes = "Vendor promoted to trusted."
             };
 
             await historyRepository.AddAsync(history);
@@ -180,6 +245,7 @@ public class VendorVerificationService : IVendorVerificationService
         return new VendorDetailsDto
         {
             VendorId = vendor.Id,
+            UserId = vendor.UserId,
             VendorName = vendor.User.FullName,
             Email = vendor.User.Email,
             PhoneNumber = vendor.User.PhoneNumber,
@@ -191,9 +257,14 @@ public class VendorVerificationService : IVendorVerificationService
             Address = vendor.Address,
 
             VerificationStatus = verification.Status,
-            SubmittedAt = (DateTimeOffset)verification.SubmittedAt,
+            SubmittedAt = verification.SubmittedAt,
             ReviewedAt = verification.ReviewedAt,
             RejectionReason = verification.RejectionReason,
+            TrustedSince = verification.TrustedSince,
+
+            AvgRating = vendor.AvgRating,
+            TotalReviews = vendor.TotalReviews,
+            TotalCompletedBookings = vendor.TotalCompletedBookings,
 
             Documents = verification.Documents
                 .Select(d => new VendorDocumentDto

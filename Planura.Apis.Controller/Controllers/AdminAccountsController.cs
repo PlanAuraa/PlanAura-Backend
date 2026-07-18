@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
-using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.AccountAdmin;
 
 namespace Planura.Apis.Controllers;
 
