@@ -1,8 +1,9 @@
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Planura.Core.Domain.Repositories;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Threading.Tasks;
 
 namespace Planura.Infrastructure.Persistence.Repositories;
 
@@ -81,9 +82,19 @@ public class GenericRepository<TEntity, TKey> : IGenericRepository<TEntity, TKey
     {
         return _dbContext.Set<TEntity>();
     }
+    public async Task<decimal> GetSumAsync(
+    ISpecification<TEntity> spec,
+    Expression<Func<TEntity, decimal>> selector)
+    {
+        var query = ApplySpecifications(spec);
+
+        return await query.SumAsync(selector);
+    }
 
     private IQueryable<TEntity> ApplySpecifications(ISpecification<TEntity> spec)
     {
         return SpecificationEvaluator<TEntity>.GetQuery(_dbContext.Set<TEntity>(), spec);
     }
+
+    
 }

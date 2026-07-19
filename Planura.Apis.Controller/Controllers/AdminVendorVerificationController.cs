@@ -66,4 +66,16 @@ public class AdminVendorVerificationController : ControllerBase
 
         return Ok(result);
     }
+
+    /// <summary>Promotes an already-Verified vendor to the admin-curated Trusted tier.</summary>
+    [HttpPost("{vendorId:long}/trust")]
+    public async Task<IActionResult> PromoteToTrusted(long vendorId)
+    {
+        await _vendorVerificationService.PromoteToTrustedAsync(vendorId);
+
+        return Ok(new
+        {
+            Message = "Vendor promoted to trusted successfully."
+        });
+    }
 }

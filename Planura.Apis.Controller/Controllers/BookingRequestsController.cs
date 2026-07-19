@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.Booking;
 using Planura.Shared.Errors.Models;
 
 namespace Planura.Apis.Controllers;

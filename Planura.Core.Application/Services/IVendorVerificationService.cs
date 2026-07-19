@@ -12,4 +12,7 @@ public interface IVendorVerificationService
     Task<VendorDetailsDto> GetVendorDetailsAsync(long vendorId);
     Task<IEnumerable<VendorVerificationHistoryDto>> GetVerificationHistoryAsync(long vendorId);
     Task<VendorVerificationStatusDto> ResubmitVerificationAsync(long vendorId, ResubmitVerificationDto dto);
+
+    /// <summary>Promotes an already-Verified vendor to the admin-curated Trusted tier.</summary>
+    Task PromoteToTrustedAsync(long vendorId);
 }

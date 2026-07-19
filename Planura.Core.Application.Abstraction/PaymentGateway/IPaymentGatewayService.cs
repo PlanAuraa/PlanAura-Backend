@@ -11,6 +11,9 @@ namespace Planura.Core.Application.Abstraction.PaymentGateway
         /// <summary>Voids a previously authorized (not yet captured) PaymentIntent, releasing the held funds.</summary>
         Task CancelPaymentIntentAsync(CancelPaymentIntentRequest request);
 
+        /// <summary>Refunds a previously captured (Completed) PaymentIntent, in full or in part.</summary>
+        Task<RefundResult> RefundPaymentIntentAsync(RefundPaymentIntentRequest request);
+
         PaymentGatewayEvent ConstructWebhookEvent(string rawJson, string signatureHeader);
     }
 }

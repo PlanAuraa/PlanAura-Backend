@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;

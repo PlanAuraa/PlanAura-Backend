@@ -3,6 +3,7 @@ using Moq;
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.Auth;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;

@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Models;
-using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.Auth;
 
 namespace Planura.Apis.Controllers;
 
@@ -36,6 +36,21 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<CurrentUserDto>> Me()
     {
         return Ok(await _authService.GetCurrentUserAsync());
+    }
+
+    [Authorize]
+    [HttpPut("me")]
+    public async Task<ActionResult<CurrentUserDto>> UpdateMe([FromBody] UpdateProfileDto dto)
+    {
+        return Ok(await _authService.UpdateMyProfileAsync(dto));
+    }
+
+    [Authorize]
+    [HttpPost("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto dto)
+    {
+        await _authService.ChangePasswordAsync(dto);
+        return Ok(new { Message = "Password changed successfully." });
     }
 
 
