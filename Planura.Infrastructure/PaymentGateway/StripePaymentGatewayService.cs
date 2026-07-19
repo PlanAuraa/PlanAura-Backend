@@ -25,6 +25,11 @@ namespace Planura.Infrastructure.PaymentGateway
                 PaymentMethod = request.PaymentMethodId,
                 CaptureMethod = "manual",
                 Confirm = true,
+                AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                {
+                    Enabled = true,
+                    AllowRedirects = "never",
+                },
                 Metadata = new Dictionary<string, string>(request.Metadata)
             };
 

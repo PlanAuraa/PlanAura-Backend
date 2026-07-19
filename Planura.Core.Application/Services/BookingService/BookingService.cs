@@ -263,7 +263,14 @@ public class BookingService : IBookingService
             var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
             var holds = await holdRepo.GetAllWithSpecAsync(
                 new VendorAvailabilityByBookingRequestSpecification(bookingRequestId));
-            holdRepo.DeleteRange(holds);
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
 
             var history = new BookingStatusHistory
             {
@@ -452,7 +459,14 @@ public class BookingService : IBookingService
             var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
             var holds = await holdRepo.GetAllWithSpecAsync(
                 new VendorAvailabilityByBookingRequestSpecification(bookingRequestId));
-            holdRepo.DeleteRange(holds);
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
 
             var history = new BookingStatusHistory
             {
@@ -514,7 +528,14 @@ public class BookingService : IBookingService
             var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
             var holds = await holdRepo.GetAllWithSpecAsync(
                 new VendorAvailabilityByBookingRequestSpecification(booking.Id));
-            holdRepo.DeleteRange(holds);
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
 
             var history = new BookingStatusHistory
             {
@@ -533,6 +554,11 @@ public class BookingService : IBookingService
             await _unitOfWork.RollbackTransactionAsync();
             throw;
         }
+
+        // The capture attempt failed, but the PaymentIntent may still be live (requires_capture) on Stripe's
+        // side — this is what left pi_3Tu1cdJTBgcTyrCL0osgfeOY orphaned in production/test. Void it the same
+        // way Reject/Cancel do, so the hold on the client's card is actually released.
+        await VoidAuthorizationBestEffortAsync(payment, "payment capture failed on vendor accept");
 
         var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
         if (client is not null)
