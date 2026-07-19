@@ -1,5 +1,8 @@
 ﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging;
 using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Abstraction.WhatsApp;
 using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
@@ -17,15 +20,27 @@ public class VendorVerificationService : IVendorVerificationService
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICurrentUserService _currentUserService;
     private readonly IAttachmentService _attachmentService;
+    private readonly INotificationService _notificationService;
+    private readonly IWhatsAppService _whatsAppService;
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ILogger<VendorVerificationService> _logger;
 
     public VendorVerificationService(
         IUnitOfWork unitOfWork,
         ICurrentUserService currentUserService,
-        IAttachmentService attachmentService)
+        IAttachmentService attachmentService,
+        INotificationService notificationService,
+        IWhatsAppService whatsAppService,
+        UserManager<ApplicationUser> userManager,
+        ILogger<VendorVerificationService> logger)
     {
         _unitOfWork = unitOfWork;
         _currentUserService = currentUserService;
         _attachmentService = attachmentService;
+        _notificationService = notificationService;
+        _whatsAppService = whatsAppService;
+        _userManager = userManager;
+        _logger = logger;
     }
 
     public async Task ApproveVendorAsync(long vendorId)
@@ -78,6 +93,13 @@ public class VendorVerificationService : IVendorVerificationService
 
             await _unitOfWork.SaveChangesAsync();
             await _unitOfWork.CommitTransactionAsync();
+
+            await NotifyVendorDecisionAsync(
+                vendor.UserId,
+                NotificationTypes.VendorApproved,
+                "Vendor approved",
+                $"Your vendor account \"{vendor.BusinessName}\" has been approved.",
+                $"Congratulations! Your vendor account \"{vendor.BusinessName}\" has been approved. You can now access your Vendor Dashboard on Planura.");
         }
         catch
         {
@@ -137,6 +159,13 @@ public class VendorVerificationService : IVendorVerificationService
 
             await _unitOfWork.SaveChangesAsync();
             await _unitOfWork.CommitTransactionAsync();
+
+            await NotifyVendorDecisionAsync(
+                vendor.UserId,
+                NotificationTypes.VendorRejected,
+                "Vendor verification rejected",
+                $"Your vendor verification for \"{vendor.BusinessName}\" was not approved. Reason: {rejectionReason}",
+                $"Your vendor verification for \"{vendor.BusinessName}\" was not approved. Reason: {rejectionReason}. You may resubmit your documents from your dashboard.");
         }
         catch
         {
@@ -446,5 +475,29 @@ public class VendorVerificationService : IVendorVerificationService
         await _unitOfWork.Repository<VendorVerificationDocument, long>().AddAsync(document);
     }
 
+    /// <summary>
+    /// Notifies a vendor of an approve/reject decision on two channels: the existing
+    /// in-app notification (unchanged, reused as-is) first, then WhatsApp as an additional
+    /// delivery channel. Both are best-effort — this runs only after the caller has already
+    /// committed the verification decision, and a failure here must never surface as a
+    /// failure of that already-committed decision.
+    /// </summary>
+    private async Task NotifyVendorDecisionAsync(
+        long userId, string notificationType, string title, string body, string whatsAppMessage)
+    {
+        try
+        {
+            await _notificationService.NotifyUserAsync(userId, notificationType, title, body);
 
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+            if (!string.IsNullOrWhiteSpace(user?.PhoneNumber))
+            {
+                await _whatsAppService.SendMessageAsync(user.PhoneNumber, whatsAppMessage);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify vendor user {UserId} of a verification decision", userId);
+        }
+    }
 }

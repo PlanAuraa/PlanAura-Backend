@@ -26,6 +26,7 @@ public static class ApplicationServiceCollectionExtensions
         services.Configure<BookingOptions>(configuration.GetSection(BookingOptions.SectionName));
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
+        services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IAccountAdminService, AccountAdminService>();
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
