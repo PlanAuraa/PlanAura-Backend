@@ -25,6 +25,11 @@ namespace Planura.Infrastructure.PaymentGateway
                 PaymentMethod = request.PaymentMethodId,
                 CaptureMethod = "manual",
                 Confirm = true,
+                AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                {
+                    Enabled = true,
+                    AllowRedirects = "never",
+                },
                 Metadata = new Dictionary<string, string>(request.Metadata)
             };
 
@@ -82,6 +87,35 @@ namespace Planura.Infrastructure.PaymentGateway
 
             var service = new PaymentIntentService();
             await service.CancelAsync(request.PaymentIntentId, cancelOptions, requestOptions);
+        }
+
+        public async Task<RefundResult> RefundPaymentIntentAsync(RefundPaymentIntentRequest request)
+        {
+            var createOptions = new RefundCreateOptions
+            {
+                PaymentIntent = request.PaymentIntentId,
+                Amount = request.AmountInSmallestUnit,
+                Reason = request.Reason
+            };
+
+            var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
+
+            var service = new RefundService();
+            Refund refund;
+            try
+            {
+                refund = await service.CreateAsync(createOptions, requestOptions);
+            }
+            catch (StripeException ex)
+            {
+                throw new PaymentDeclinedExeption(ex.StripeError?.Message ?? ex.Message);
+            }
+
+            return new RefundResult
+            {
+                RefundId = refund.Id,
+                Status = refund.Status
+            };
         }
 
         public PaymentGatewayEvent ConstructWebhookEvent(string rawJson, string signatureHeader)

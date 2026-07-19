@@ -4,7 +4,7 @@ using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
-using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Infrastructure.Extensions;
 using Planura.Infrastructure.Persistence.Extensions;
 using Planura.Infrastructure.Persistence.Seed;

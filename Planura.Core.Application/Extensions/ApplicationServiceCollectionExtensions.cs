@@ -2,6 +2,18 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Services;
+using Planura.Core.Application.Services.AccountAdmin;
+using Planura.Core.Application.Services.AdminBooking;
+using Planura.Core.Application.Services.AdminClient;
+using Planura.Core.Application.Services.AdminDashboard;
+using Planura.Core.Application.Services.AdminPayment;
+using Planura.Core.Application.Services.AdminReport;
+using Planura.Core.Application.Services.AdminVendor;
+using Planura.Core.Application.Services.AiChat;
+using Planura.Core.Application.Services.Auth;
+using Planura.Core.Application.Services.Booking;
+using Planura.Core.Application.Services.BookingHoldExpiryJob;
+using Planura.Core.Application.Services.CategoryService;
 using System.Reflection;
 
 namespace Planura.Core.Application.Extensions;
@@ -27,7 +39,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IEventPlanService, EventPlanService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IAiChatService, AiChatService>();
+        services.AddScoped<IAdminDashboardService, AdminDashboardService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
+        services.AddScoped<IAdminPaymentService, AdminPaymentService>();
+        services.AddScoped<IAdminBookingService, AdminBookingService>();
+        services.AddScoped<IAdminVendorService, AdminVendorService>();
+        services.AddScoped<IAdminClientService, AdminClientService>();
+        services.AddScoped<IAdminReportService, AdminReportService>();
         return services;
     }
 }
