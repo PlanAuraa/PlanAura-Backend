@@ -4,6 +4,7 @@ using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
 using Planura.Core.Application.Services.Auth;
+using Planura.Core.Application.Services.Emails;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
@@ -21,6 +22,7 @@ public class AuthServiceTests
     private readonly Mock<ICurrentUserService> _currentUserServiceMock = new();
     private readonly Mock<IAttachmentService> _attachmentServiceMock = new();
     private readonly Mock<INotificationService> _notificationServiceMock = new();
+    private readonly Mock<IEmailService> _EmailServiceMock = new();
 
     private AuthService CreateService() => new(
         _userManagerMock.Object,
@@ -28,7 +30,10 @@ public class AuthServiceTests
         _tokenServiceMock.Object,
         _currentUserServiceMock.Object,
         _attachmentServiceMock.Object,
-        _notificationServiceMock.Object);
+        _notificationServiceMock.Object,
+        _EmailServiceMock.Object
+
+        );
 
     private static RegisterVendorDto CreateValidIndividualDto() => new()
     {

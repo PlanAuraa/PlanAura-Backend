@@ -10,6 +10,8 @@ public class ApplicationUser : IdentityUser<long>
     public DateTimeOffset? LastLoginAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public int? ResetCode { get; set; }
+    public DateTime? ResetCodeExpiry { get; set; }
 
     public Client? Client { get; set; }
     public Vendor? Vendor { get; set; }
