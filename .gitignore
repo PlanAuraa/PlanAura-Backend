@@ -365,3 +365,4 @@ FodyWeavers.xsd
 # Local upload images
 Planura.Apis/wwwroot/images/vendor-portfolio/
 Planura.Apis/wwwroot/images/vendor-verification-documents/
+Planura.Apis/wwwroot/images/ai-visualizer/

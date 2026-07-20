@@ -47,6 +47,23 @@ namespace Planura.Infrastructure.AttachementService
             return $"images/{folderName}/{fileName}";
         }
 
+        public async Task<string?> UploadGeneratedFileAsync(byte[] fileBytes, string fileExtension, string folderName)
+        {
+            if (fileBytes.Length == 0)
+                throw new BadRequestExeption("Generated file is empty.");
+
+            var folderPath = Path.Combine(_env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot"), "images", folderName);
+            if (!Directory.Exists(folderPath))
+                Directory.CreateDirectory(folderPath);
+
+            var fileName = $"{Guid.NewGuid():N}{fileExtension}";
+            var filePath = Path.Combine(folderPath, fileName);
+
+            await File.WriteAllBytesAsync(filePath, fileBytes);
+
+            return $"images/{folderName}/{fileName}";
+        }
+
         public string? ToAbsoluteUrl(string? relativePath)
         {
             if (string.IsNullOrWhiteSpace(relativePath))
