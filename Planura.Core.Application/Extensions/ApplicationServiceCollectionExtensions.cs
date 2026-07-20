@@ -10,6 +10,7 @@ using Planura.Core.Application.Services.AdminPayment;
 using Planura.Core.Application.Services.AdminReport;
 using Planura.Core.Application.Services.AdminVendor;
 using Planura.Core.Application.Services.AiChat;
+using Planura.Core.Application.Services.AiVisualizer;
 using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
@@ -28,6 +29,7 @@ public static class ApplicationServiceCollectionExtensions
         services.Configure<BookingOptions>(configuration.GetSection(BookingOptions.SectionName));
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
+        services.Configure<HuggingFaceOptions>(configuration.GetSection(HuggingFaceOptions.SectionName));
         services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IAccountAdminService, AccountAdminService>();
@@ -43,6 +45,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IEventPlanService, EventPlanService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IAiChatService, AiChatService>();
+        services.AddScoped<IAiVisualizerService, AiVisualizerService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
         services.AddScoped<IAdminPaymentService, AdminPaymentService>();

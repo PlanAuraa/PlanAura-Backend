@@ -13,9 +13,11 @@ using Planura.Core.Domain.Entities;
 using Planura.Infrastructure.Authorization;
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Abstraction.AiChat;
+using Planura.Core.Application.Abstraction.AiVisualizer;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Abstraction.WhatsApp;
 using Planura.Infrastructure.AiChat;
+using Planura.Infrastructure.AiVisualizer;
 using Planura.Infrastructure.AttachementService;
 using Planura.Infrastructure.Options;
 using Planura.Infrastructure.PaymentGateway;
@@ -39,6 +41,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IPaymentGatewayService, StripePaymentGatewayService>();
         services.AddScoped<IWhatsAppService, TwilioWhatsAppService>();
         services.AddHttpClient<IAiChatProvider, OpenAiChatProvider>();
+        services.AddHttpClient<IHuggingFaceApiService, HuggingFaceApiService>();
         services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
