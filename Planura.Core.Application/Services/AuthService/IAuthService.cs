@@ -1,4 +1,5 @@
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.Auth;
 
 namespace Planura.Core.Application.Services.Auth;
 
@@ -8,6 +9,10 @@ public interface IAuthService
     Task<AuthResponseDto> RegisterVendorAsync(RegisterVendorDto dto);
     Task<AuthResponseDto> LoginAsync(LoginDto dto);
     Task<CurrentUserDto> GetCurrentUserAsync();
+
+    Task<SuccessDto> ForgetPasswordByEmailasync(ForgetPasswordByEmailDto emailDto);
+    Task<SuccessDto> VerifyCodeByEmailAsync(ResetCodeConfirmationByEmailDto resetCodeDto);
+    Task<AuthResponseDto> ResetPasswordByEmailAsync(ResetPasswordByEmailDto resetCodeDto);
 
     /// <summary>Updates the current user's own FullName/PhoneNumber/PreferredLanguage. General-purpose
     /// across all three roles (AdminDashboardPlan.md 2.16).</summary>

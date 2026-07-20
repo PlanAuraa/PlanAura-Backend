@@ -14,6 +14,8 @@ using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Core.Application.Services.CategoryService;
+using Planura.Core.Application.Services.Emails;
+using Planura.Shared.Settings;
 using System.Reflection;
 
 namespace Planura.Core.Application.Extensions;
@@ -48,6 +50,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminVendorService, AdminVendorService>();
         services.AddScoped<IAdminClientService, AdminClientService>();
         services.AddScoped<IAdminReportService, AdminReportService>();
+        services.AddTransient(typeof(IEmailService), typeof(EmailService));
+        services.Configure<MailSettings>(configuration.GetSection("MailSettings"));
+
         return services;
     }
 }

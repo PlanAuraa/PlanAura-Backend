@@ -1,13 +1,19 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.Auth;
+using Planura.Core.Application.Models.Emails;
+using Planura.Core.Application.Services.Emails;
 using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
+using System.Data;
+using System.Security.Cryptography;
 
 namespace Planura.Core.Application.Services.Auth;
 
@@ -23,6 +29,7 @@ public class AuthService : IAuthService
     private readonly ICurrentUserService _currentUserService;
     private readonly IAttachmentService _attachmentService;
     private readonly INotificationService _notificationService;
+    private readonly IEmailService _emailService;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -30,7 +37,8 @@ public class AuthService : IAuthService
         ITokenService tokenService,
         ICurrentUserService currentUserService,
         IAttachmentService attachmentService,
-        INotificationService notificationService)
+        INotificationService notificationService,
+        IEmailService emailService)
     {
         _userManager = userManager;
         _unitOfWork = unitOfWork;
@@ -38,6 +46,7 @@ public class AuthService : IAuthService
         _currentUserService = currentUserService;
         _attachmentService = attachmentService;
         _notificationService = notificationService;
+        _emailService = emailService;
     }
 
     public async Task<AuthResponseDto> RegisterClientAsync(RegisterClientDto dto)
@@ -394,6 +403,99 @@ public class AuthService : IAuthService
         }
     }
 
+    public async Task<SuccessDto> ForgetPasswordByEmailasync(ForgetPasswordByEmailDto emailDto)
+    {
+        var user = await _userManager.Users.Where(u => u.Email == emailDto.Email).FirstOrDefaultAsync();
+
+        if (user is null)
+            throw new BadRequestExeption("Invalid Email");
+
+        var ResetCode = RandomNumberGenerator.GetInt32(100_000, 999_999);
+
+        var ResetCodeExpire = DateTime.UtcNow.AddMinutes(15);
+
+        user.ResetCode = ResetCode;
+        user.ResetCodeExpiry = ResetCodeExpire;
+
+        var result = await _userManager.UpdateAsync(user);
+
+        if (!result.Succeeded)
+            throw new BadRequestExeption("Something Went Wrong While Sending Reset Code");
+
+        var email = new Email()
+        {
+            To = emailDto.Email,
+            Subject = "Reset Code For PlanAura Account",
+            Body = $"We Have Recived Your Request For Reset Your Account Password, \nYour Reset Code Is ==> [ {ResetCode} ] <== \nNote: This Code Will Be Expired After 15 Minutes!",
+        };
+
+        await _emailService.SendEmail(email);
+
+        var SuccessObj = new SuccessDto()
+        {
+            Status = "Success",
+            Message = "We Have Sent You The Reset Code"
+        };
+
+        return SuccessObj;
+    }
+
+
+    public async Task<SuccessDto> VerifyCodeByEmailAsync(ResetCodeConfirmationByEmailDto resetCodeDto)
+    {
+        var user = await _userManager.Users.Where(u => u.Email == resetCodeDto.Email).FirstOrDefaultAsync();
+
+        if (user is null)
+            throw new BadRequestExeption("Invalid Email");
+
+        if (user.ResetCode != resetCodeDto.ResetCode)
+            throw new BadRequestExeption("The Provided Code Is Invalid");
+
+        if (user.ResetCodeExpiry < DateTime.UtcNow)
+            throw new BadRequestExeption("The Provided Code Has Been Expired");
+
+        var SuccessObj = new SuccessDto()
+        {
+            Status = "Success",
+            Message = "Reset Code Is Verified, Please Proceed To Change Your Password"
+        };
+
+        return SuccessObj;
+    }
+    public async Task<AuthResponseDto> ResetPasswordByEmailAsync(ResetPasswordByEmailDto resetCodeDto)
+    {
+        var user = await _userManager.Users.Where(u => u.Email == resetCodeDto.Email).FirstOrDefaultAsync();
+
+        if (user is null)
+            throw new BadRequestExeption("Invalid Email");
+
+        var RemovePass = await _userManager.RemovePasswordAsync(user);
+
+        if (!RemovePass.Succeeded)
+            throw new BadRequestExeption("Something Went Wrong While Reseting Your Password");
+
+        var newPass = await _userManager.AddPasswordAsync(user, resetCodeDto.NewPassword);
+
+        if (!newPass.Succeeded)
+            throw new BadRequestExeption("Something Went Wrong While Reseting Your Password");
+
+        var roles = await _userManager.GetRolesAsync(user);
+        var token = _tokenService.CreateToken(user, roles.ToList());
+
+        var mappedUser = new AuthResponseDto
+        {
+            AccessToken = token.AccessToken,
+            ExpiresAtUtc = token.ExpiresAtUtc,
+            UserId = user.Id,
+            FullName = user.FullName!,
+            Email = user.Email!,
+            Roles = roles.ToList()
+        };
+
+
+
+        return mappedUser;
+    }
     private static string DescribeErrors(IdentityResult result)
         => string.Join("; ", result.Errors.Select(error => $"{error.Code}: {error.Description}"));
 }

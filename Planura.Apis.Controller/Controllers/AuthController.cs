@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.Auth;
 using Planura.Core.Application.Services.Auth;
 
 namespace Planura.Apis.Controllers;
@@ -30,7 +31,7 @@ public class AuthController : ControllerBase
         return Ok(await _authService.LoginAsync(dto));
     }
 
-    
+
     [Authorize]
     [HttpGet("me")]
     public async Task<ActionResult<CurrentUserDto>> Me()
@@ -61,5 +62,23 @@ public class AuthController : ControllerBase
     [FromForm] RegisterVendorDto dto)
     {
         return Ok(await _authService.RegisterVendorAsync(dto));
+    }
+    [AllowAnonymous]
+    [HttpPost("forget-password")]
+    public async Task<ActionResult<SuccessDto>> ForgetPasswordByEmail([FromBody] ForgetPasswordByEmailDto emailDto)
+    {
+        return Ok(await _authService.ForgetPasswordByEmailasync(emailDto));
+    }
+    [AllowAnonymous]
+    [HttpPost("verify-code")]
+    public async Task<ActionResult<SuccessDto>> VerifyCodeByEmail([FromBody] ResetCodeConfirmationByEmailDto resetCodeDto)
+    {
+        return Ok(await _authService.VerifyCodeByEmailAsync(resetCodeDto));
+    }
+    [AllowAnonymous]
+    [HttpPost("reset-password")]
+    public async Task<ActionResult<AuthResponseDto>> ResetPasswordByEmail([FromBody] ResetPasswordByEmailDto resetCodeDto)
+    {
+        return Ok(await _authService.ResetPasswordByEmailAsync(resetCodeDto));
     }
 }
