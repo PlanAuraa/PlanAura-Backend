@@ -38,5 +38,10 @@ namespace Planura.Core.Application.Models.Vendor
         public int TotalCompletedBookings { get; set; }
 
         public DateTimeOffset CreatedAt { get; set; }
+
+        public bool HasPartnershipAgreement => !string.IsNullOrWhiteSpace(PartnershipAgreementUrl);
+        public string? PartnershipAgreementId { get; set; }
+        public string? PartnershipAgreementUrl { get; set; }
+        public DateTimeOffset? PartnershipAgreementGeneratedAt { get; set; }
     }
 }

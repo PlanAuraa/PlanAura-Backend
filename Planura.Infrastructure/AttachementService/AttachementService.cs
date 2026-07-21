@@ -15,6 +15,11 @@ namespace Planura.Infrastructure.AttachementService
 
         private readonly List<string> _allowedExtentions = new() { ".png", ".jpg", ".jpeg" };
         private const int _allowedMaxSize = 2_097_152;
+
+        // Separate allow-list for generated documents (contracts/agreements): PDFs, larger cap.
+        private readonly List<string> _allowedDocumentExtensions = new() { ".pdf" };
+        private const int _allowedDocumentMaxSize = 10_485_760; // 10 MB
+
         private readonly IWebHostEnvironment _env;
         private readonly IHttpContextAccessor _httpContextAccessor;
 
@@ -45,6 +50,28 @@ namespace Planura.Infrastructure.AttachementService
             await file.CopyToAsync(fileStream);
 
             return $"images/{folderName}/{fileName}";
+        }
+
+        public async Task<string?> UploadBytesAsync(byte[] content, string fileName, string folderName)
+        {
+            var extention = Path.GetExtension(fileName);
+
+            if (!_allowedDocumentExtensions.Contains(extention))
+                throw new BadRequestExeption($"File extension '{extention}' is not allowed. Allowed: {string.Join(", ", _allowedDocumentExtensions)}");
+
+            if (content.LongLength > _allowedDocumentMaxSize)
+                throw new BadRequestExeption("File size exceeds the maximum allowed size (10 MB).");
+
+            var folderPath = Path.Combine(_env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot"), "documents", folderName);
+            if (!Directory.Exists(folderPath))
+                Directory.CreateDirectory(folderPath);
+
+            var savedFileName = $"{Guid.NewGuid():N}{extention}";
+            var filePath = Path.Combine(folderPath, savedFileName);
+
+            await File.WriteAllBytesAsync(filePath, content);
+
+            return $"documents/{folderName}/{savedFileName}";
         }
 
         public string? ToAbsoluteUrl(string? relativePath)

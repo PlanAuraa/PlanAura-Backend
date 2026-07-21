@@ -23,7 +23,7 @@ public class NotificationService : INotificationService
         _userManager = userManager;
     }
 
-    public async Task NotifyUserAsync(long userId, string type, string title, string? body = null)
+    public async Task NotifyUserAsync(long userId, string type, string title, string? body = null, string? dataJson = null)
     {
         var notification = new Notification
         {
@@ -31,6 +31,7 @@ public class NotificationService : INotificationService
             Type = type,
             Title = title,
             Body = body,
+            DataJson = dataJson,
             IsRead = false
         };
 
@@ -38,7 +39,7 @@ public class NotificationService : INotificationService
         await _unitOfWork.SaveChangesAsync();
     }
 
-    public async Task NotifyRoleAsync(string role, string type, string title, string? body = null)
+    public async Task NotifyRoleAsync(string role, string type, string title, string? body = null, string? dataJson = null)
     {
         var users = await _userManager.GetUsersInRoleAsync(role);
 
@@ -53,6 +54,7 @@ public class NotificationService : INotificationService
             Type = type,
             Title = title,
             Body = body,
+            DataJson = dataJson,
             IsRead = false
         });
 
@@ -74,6 +76,7 @@ public class NotificationService : INotificationService
             Type = n.Type,
             Title = n.Title,
             Body = n.Body,
+            DataJson = n.DataJson,
             IsRead = n.IsRead,
             CreatedAt = n.CreatedAt
         });

@@ -314,7 +314,11 @@ public class VendorVerificationService : IVendorVerificationService
                     Title = m.Title,
                     DisplayOrder = m.DisplayOrder
                 })
-                .ToList()
+                .ToList(),
+
+            PartnershipAgreementId = vendor.PartnershipAgreementId,
+            PartnershipAgreementUrl = vendor.PartnershipAgreementUrl,
+            PartnershipAgreementGeneratedAt = vendor.PartnershipAgreementGeneratedAt
         };
     }
 
@@ -475,13 +479,6 @@ public class VendorVerificationService : IVendorVerificationService
         await _unitOfWork.Repository<VendorVerificationDocument, long>().AddAsync(document);
     }
 
-    /// <summary>
-    /// Notifies a vendor of an approve/reject decision on two channels: the existing
-    /// in-app notification (unchanged, reused as-is) first, then WhatsApp as an additional
-    /// delivery channel. Both are best-effort — this runs only after the caller has already
-    /// committed the verification decision, and a failure here must never surface as a
-    /// failure of that already-committed decision.
-    /// </summary>
     private async Task NotifyVendorDecisionAsync(
         long userId, string notificationType, string title, string body, string whatsAppMessage)
     {
