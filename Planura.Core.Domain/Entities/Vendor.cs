@@ -23,6 +23,12 @@ public class Vendor
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
+    // AI-generated Vendor Partnership Agreement with Planura. Generated at most once per vendor -
+    // a non-null PartnershipAgreementUrl means "already has one, never generate another".
+    public string? PartnershipAgreementId { get; set; }
+    public string? PartnershipAgreementUrl { get; set; }
+    public DateTimeOffset? PartnershipAgreementGeneratedAt { get; set; }
+
     public ApplicationUser User { get; set; } = null!;
     public ServiceCategory? Category { get; set; }
     public ICollection<VendorVerification> Verifications { get; set; } = new List<VendorVerification>();

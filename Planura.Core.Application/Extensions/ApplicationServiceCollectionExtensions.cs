@@ -15,6 +15,7 @@ using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Core.Application.Services.CategoryService;
+using Planura.Core.Application.Services.Contract;
 using Planura.Core.Application.Services.Emails;
 using Planura.Shared.Settings;
 using System.Reflection;
@@ -31,6 +32,7 @@ public static class ApplicationServiceCollectionExtensions
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
         services.Configure<HuggingFaceOptions>(configuration.GetSection(HuggingFaceOptions.SectionName));
         services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
+        services.Configure<GeminiOptions>(configuration.GetSection(GeminiOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IAccountAdminService, AccountAdminService>();
         services.AddScoped<IServiceCategoryService, ServiceCategoryService>();
@@ -53,6 +55,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminVendorService, AdminVendorService>();
         services.AddScoped<IAdminClientService, AdminClientService>();
         services.AddScoped<IAdminReportService, AdminReportService>();
+        services.AddScoped<IContractService, ContractService>();
         services.AddTransient(typeof(IEmailService), typeof(EmailService));
         services.Configure<MailSettings>(configuration.GetSection("MailSettings"));
 

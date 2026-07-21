@@ -53,5 +53,10 @@ namespace Planura.Core.Application.Models.VendorVerification
         public List<VendorDocumentDto> Documents { get; set; } = [];
 
         public List<PortfolioMediaDto> PortfolioMedia { get; set; } = [];
+
+        public bool HasPartnershipAgreement => !string.IsNullOrWhiteSpace(PartnershipAgreementUrl);
+        public string? PartnershipAgreementId { get; set; }
+        public string? PartnershipAgreementUrl { get; set; }
+        public DateTimeOffset? PartnershipAgreementGeneratedAt { get; set; }
     }
 }

@@ -16,6 +16,8 @@ public class VendorConfiguration : IEntityTypeConfiguration<Vendor>
         builder.Property(vendor => vendor.CoverImageUrl).HasMaxLength(500);
         builder.Property(vendor => vendor.LogoUrl).HasMaxLength(500);
         builder.Property(vendor => vendor.VerificationStatus).HasMaxLength(20).HasDefaultValue("unverified");
+        builder.Property(vendor => vendor.PartnershipAgreementId).HasMaxLength(50);
+        builder.Property(vendor => vendor.PartnershipAgreementUrl).HasMaxLength(500);
         builder.Property(vendor => vendor.AvgRating).HasPrecision(3, 2);
         builder.Property(vendor => vendor.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(vendor => vendor.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");

@@ -23,6 +23,11 @@ public class BookingRequest
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
+    // AI-generated Event Booking Contract, produced once the booking is accepted/confirmed.
+    public string? ContractId { get; set; }
+    public string? ContractDocumentUrl { get; set; }
+    public DateTimeOffset? ContractGeneratedAt { get; set; }
+
     public DisputeStatus? DisputeStatus { get; set; }
     public DateTimeOffset? DisputedAt { get; set; }
     public long? DisputedByUserId { get; set; }

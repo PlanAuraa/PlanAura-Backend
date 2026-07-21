@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Planura.Infrastructure.Persistence;
 
@@ -11,13 +12,15 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    partial class PlanuraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260720160632_AddContractAndPartnershipFields")]
+    partial class AddContractAndPartnershipFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.18")
+                .HasAnnotation("ProductVersion", "9.0.17")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -442,14 +445,6 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(5)")
                         .HasDefaultValue("ar")
                         .HasColumnName("preferred_language");
-
-                    b.Property<int?>("ResetCode")
-                        .HasColumnType("int")
-                        .HasColumnName("reset_code");
-
-                    b.Property<DateTime?>("ResetCodeExpiry")
-                        .HasColumnType("datetime2")
-                        .HasColumnName("reset_code_expiry");
 
                     b.Property<string>("SecurityStamp")
                         .HasColumnType("nvarchar(max)")

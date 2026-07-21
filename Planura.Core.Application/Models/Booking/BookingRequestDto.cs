@@ -25,4 +25,8 @@ public class BookingRequestDto
     public DateTimeOffset? DisputedAt { get; set; }
     public string? ResolutionNotes { get; set; }
     public DateTimeOffset? ResolvedAt { get; set; }
+
+    public string? ContractId { get; set; }
+    public string? ContractDocumentUrl { get; set; }
+    public DateTimeOffset? ContractGeneratedAt { get; set; }
 }

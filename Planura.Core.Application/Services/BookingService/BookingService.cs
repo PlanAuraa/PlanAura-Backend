@@ -1,16 +1,19 @@
 using AutoMapper;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services.Booking;
+using Planura.Core.Application.Services.Contract;
 using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
+using System.Text.Json;
 
 namespace Planura.Core.Application.Services;
 
@@ -22,10 +25,20 @@ public class BookingService : IBookingService
     private const int UniqueConstraintViolationNumber = 2601;
     private const int UniqueIndexViolationNumber = 2627;
 
+    private const string BookingContractsFolder = "booking-contracts";
+    private const string VendorPartnershipAgreementsFolder = "vendor-partnership-agreements";
+
+    private static readonly JsonSerializerOptions NotificationDataJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private readonly IUnitOfWork _unitOfWork;
     private readonly IMapper _mapper;
     private readonly INotificationService _notificationService;
     private readonly IPaymentGatewayService _paymentGatewayService;
+    private readonly IContractService _contractService;
+    private readonly IAttachmentService _attachmentService;
     private readonly BookingOptions _bookingOptions;
     private readonly StripeOptions _stripeOptions;
     private readonly ILogger<BookingService> _logger;
@@ -35,6 +48,8 @@ public class BookingService : IBookingService
         IMapper mapper,
         INotificationService notificationService,
         IPaymentGatewayService paymentGatewayService,
+        IContractService contractService,
+        IAttachmentService attachmentService,
         IOptions<BookingOptions> bookingOptions,
         IOptions<StripeOptions> stripeOptions,
         ILogger<BookingService> logger)
@@ -43,6 +58,8 @@ public class BookingService : IBookingService
         _mapper = mapper;
         _notificationService = notificationService;
         _paymentGatewayService = paymentGatewayService;
+        _contractService = contractService;
+        _attachmentService = attachmentService;
         _bookingOptions = bookingOptions.Value;
         _stripeOptions = stripeOptions.Value;
         _logger = logger;
@@ -204,7 +221,7 @@ public class BookingService : IBookingService
             "New booking request",
             $"You have a new booking request for {booking.EventDate:d}."));
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     /// <summary>
@@ -307,7 +324,7 @@ public class BookingService : IBookingService
                 $"The client cancelled their booking request for {booking.EventDate:d}."));
         }
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId)
@@ -415,17 +432,15 @@ public class BookingService : IBookingService
             throw;
         }
 
+        // Step 2-4 of the AI contract workflow: generate the Event Booking Contract, generate the
+        // vendor's one-time Partnership Agreement if it doesn't have one yet, persist both via the
+        // existing attachment storage, and notify client/vendor/admin. All best-effort: the payment
+        // has already been captured above, so a Gemini/PDF hiccup here must never fail this call or
+        // undo the accepted booking.
         var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
-        if (client is not null)
-        {
-            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
-                client.UserId,
-                NotificationTypes.BookingAccepted,
-                "Booking request accepted",
-                $"Your booking request for {booking.EventDate:d} was accepted and your payment has been processed."));
-        }
+        await GenerateContractsAndNotifyAsync(booking, client, vendorUserId);
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     public async Task<BookingRequestDto> RejectBookingRequestAsync(long bookingRequestId, long vendorUserId, string? reason)
@@ -503,7 +518,7 @@ public class BookingService : IBookingService
                 $"The vendor declined your booking request for {booking.EventDate:d}."));
         }
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     private async Task AutoDeclineAfterCaptureFailureAsync(BookingRequest booking, Payment payment)
@@ -582,7 +597,7 @@ public class BookingService : IBookingService
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
         }
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     public async Task<PagedResult<BookingRequestDto>> ListMyBookingRequestsAsync(long clientUserId, BookingRequestFilterDto filter)
@@ -603,7 +618,7 @@ public class BookingService : IBookingService
 
         return new PagedResult<BookingRequestDto>
         {
-            Items = _mapper.Map<List<BookingRequestDto>>(items),
+            Items = MapBookings(items),
             TotalCount = totalCount,
             Page = page,
             PageSize = pageSize
@@ -628,7 +643,7 @@ public class BookingService : IBookingService
 
         return new PagedResult<BookingRequestDto>
         {
-            Items = _mapper.Map<List<BookingRequestDto>>(items),
+            Items = MapBookings(items),
             TotalCount = totalCount,
             Page = page,
             PageSize = pageSize
@@ -645,7 +660,7 @@ public class BookingService : IBookingService
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
         }
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     public async Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason)
@@ -694,7 +709,7 @@ public class BookingService : IBookingService
 
         await _unitOfWork.SaveChangesAsync();
 
-        return _mapper.Map<BookingRequestDto>(booking);
+        return MapBooking(booking);
     }
 
     private async Task<long> ResolveClientIdAsync(long userId)
@@ -752,6 +767,229 @@ public class BookingService : IBookingService
                 payment.GatewayReference, context, payment.Id);
         }
     }
+
+    private BookingRequestDto MapBooking(BookingRequest booking)
+    {
+        var dto = _mapper.Map<BookingRequestDto>(booking);
+        dto.ContractDocumentUrl = _attachmentService.ToAbsoluteUrl(dto.ContractDocumentUrl);
+        return dto;
+    }
+
+    private List<BookingRequestDto> MapBookings(IEnumerable<BookingRequest> bookings)
+    {
+        return bookings.Select(MapBooking).ToList();
+    }
+
+    /// <summary>
+    /// Orchestrates the AI contract workflow that follows a vendor accepting (confirming) a booking:
+    /// draft + store the Client/Vendor Event Booking Contract, draft + store the Vendor/Planura
+    /// Partnership Agreement exactly once per vendor, and notify client, vendor and admins. Every
+    /// step here is best-effort - the booking is already Accepted/Paid by the time this runs, so
+    /// nothing in here is allowed to throw back to the caller.
+    /// </summary>
+    private async Task GenerateContractsAndNotifyAsync(BookingRequest booking, Client? client, long vendorUserId)
+    {
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is null)
+        {
+            return;
+        }
+
+        var vendorUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(vendor.UserId);
+        var eventPlan = await _unitOfWork.Repository<EventPlan, long>().GetAsync(booking.EventPlanId);
+        var clientUser = client is not null
+            ? await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(client.UserId)
+            : null;
+
+        string? contractUrl = null;
+        if (vendor is not null && vendorUser is not null && eventPlan is not null && client is not null && clientUser is not null)
+        {
+            contractUrl = await GenerateBookingContractBestEffortAsync(booking, vendor, eventPlan, client, clientUser, vendorUser);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Skipping Event Booking Contract generation for booking request {BookingRequestId}: vendor, vendor user, client, client user, or event plan could not be loaded.",
+                booking.Id);
+        }
+
+        if (contractUrl is not null)
+        {
+            if (client is not null)
+            {
+                await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                    client.UserId,
+                    NotificationTypes.ContractGenerated,
+                    "Your booking has been confirmed",
+                    $"Your booking with {vendor.BusinessName} for {booking.EventDate:d} has been confirmed. " +
+                    "Your Event Booking Contract is now available to view or download.",
+                    BuildDataJson(new
+                    {
+                        bookingId = booking.Id,
+                        vendorName = vendor.BusinessName,
+                        eventDate = booking.EventDate,
+                        contractUrl
+                    })));
+            }
+
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendorUserId,
+                NotificationTypes.ContractGenerated,
+                "Booking confirmed successfully",
+                "Your Booking Contract has been generated.",
+                BuildDataJson(new { bookingId = booking.Id, contractUrl })));
+        }
+        else
+        {
+            // Contract generation failed or was skipped - the parties still need to know the booking itself is confirmed.
+            if (client is not null)
+            {
+                await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                    client.UserId,
+                    NotificationTypes.BookingAccepted,
+                    "Booking request accepted",
+                    $"Your booking request for {booking.EventDate:d} was accepted and your payment has been processed.",
+                    BuildDataJson(new { bookingId = booking.Id })));
+            }
+
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendorUserId,
+                NotificationTypes.BookingAccepted,
+                "Booking confirmed successfully",
+                $"The booking for {booking.EventDate:d} is confirmed.",
+                BuildDataJson(new { bookingId = booking.Id })));
+        }
+
+        if (vendor is not null && vendorUser is not null && string.IsNullOrWhiteSpace(vendor.PartnershipAgreementUrl))
+        {
+            var agreementUrl = await GenerateVendorPartnershipBestEffortAsync(vendor, vendorUser, booking.Id);
+
+            if (agreementUrl is not null)
+            {
+                await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                    vendorUserId,
+                    NotificationTypes.PartnershipAgreementGenerated,
+                    "Partnership agreement generated",
+                    "Your Partnership Agreement with Planura has been generated and is awaiting admin review.",
+                    BuildDataJson(new { vendorId = vendor.Id, agreementUrl })));
+
+                await NotifyBestEffortAsync(() => _notificationService.NotifyRoleAsync(
+                    Roles.Admin,
+                    NotificationTypes.PartnershipAgreementPendingReview,
+                    "A new Vendor Partnership Agreement requires review",
+                    $"{vendor.BusinessName} now has a new Partnership Agreement awaiting review.",
+                    BuildDataJson(new
+                    {
+                        vendorId = vendor.Id,
+                        vendorName = vendor.BusinessName,
+                        bookingId = booking.Id,
+                        generatedAt = vendor.PartnershipAgreementGeneratedAt,
+                        agreementUrl
+                    })));
+            }
+        }
+    }
+
+    /// <summary>Drafts and stores the Event Booking Contract PDF. Returns the absolute download URL, or null on any failure.</summary>
+    private async Task<string?> GenerateBookingContractBestEffortAsync(
+        BookingRequest booking, Vendor vendor, EventPlan eventPlan, Client client, ApplicationUser clientUser, ApplicationUser vendorUser)
+    {
+        if (booking.AgreedPrice is null or <= 0)
+        {
+            _logger.LogWarning("Skipping contract generation for booking request {BookingRequestId}: no agreed price on record.", booking.Id);
+            return null;
+        }
+
+        try
+        {
+            var contractDto = new GenerateContractDto
+            {
+                ClientName = clientUser.FullName,
+                ClientEmail = clientUser.Email,
+                ClientPhone = clientUser.PhoneNumber,
+                ClientAddress = client.City,
+                ClientRepresentativeName = clientUser.FullName,
+                VendorName = vendor.BusinessName,
+                VendorEmail = vendorUser.Email,
+                VendorPhone = vendorUser.PhoneNumber,
+                VendorAddress = string.IsNullOrWhiteSpace(vendor.Address) ? vendor.City : vendor.Address,
+                VendorRepresentativeName = vendorUser.FullName,
+                EventType = eventPlan.EventType,
+                EventDate = booking.EventDate,
+                EventLocation = eventPlan.City,
+                GuestCount = booking.GuestCount ?? eventPlan.GuestCount,
+                Price = booking.AgreedPrice!.Value,
+                Currency = _stripeOptions.DefaultCurrency,
+                AdditionalTerms = booking.ClientMessage
+            };
+
+            var document = await _contractService.GenerateBookingContractAsync(contractDto);
+            var relativeUrl = await _attachmentService.UploadBytesAsync(document.Content, document.FileName, BookingContractsFolder);
+
+            booking.ContractId = document.ContractId;
+            booking.ContractDocumentUrl = relativeUrl;
+            booking.ContractGeneratedAt = DateTimeOffset.UtcNow;
+            booking.UpdatedAt = DateTimeOffset.UtcNow;
+
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+            await _unitOfWork.SaveChangesAsync();
+
+            return _attachmentService.ToAbsoluteUrl(relativeUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate the Event Booking Contract for booking request {BookingRequestId}.", booking.Id);
+            return null;
+        }
+    }
+
+    /// <summary>Drafts and stores the Vendor Partnership Agreement PDF. Returns the absolute download URL, or null on any failure.</summary>
+    private async Task<string?> GenerateVendorPartnershipBestEffortAsync(Vendor vendor, ApplicationUser vendorUser, long triggeringBookingId)
+    {
+        try
+        {
+            string? categoryName = null;
+            if (vendor.CategoryId is not null)
+            {
+                var category = await _unitOfWork.Repository<ServiceCategory, long>().GetAsync(vendor.CategoryId.Value);
+                categoryName = category?.NameEn;
+            }
+
+            var partnershipDto = new GenerateVendorPartnershipDto
+            {
+                VendorName = vendor.BusinessName,
+                VendorEmail = vendorUser.Email,
+                VendorPhone = vendorUser.PhoneNumber,
+                VendorAddress = string.IsNullOrWhiteSpace(vendor.Address) ? vendor.City : vendor.Address,
+                VendorRepresentativeName = vendorUser.FullName,
+                VendorCategory = categoryName,
+                VendorCity = vendor.City,
+                EffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow)
+            };
+
+            var document = await _contractService.GenerateVendorPartnershipContractAsync(partnershipDto);
+            var relativeUrl = await _attachmentService.UploadBytesAsync(document.Content, document.FileName, VendorPartnershipAgreementsFolder);
+
+            vendor.PartnershipAgreementId = document.ContractId;
+            vendor.PartnershipAgreementUrl = relativeUrl;
+            vendor.PartnershipAgreementGeneratedAt = DateTimeOffset.UtcNow;
+            vendor.UpdatedAt = DateTimeOffset.UtcNow;
+
+            _unitOfWork.Repository<Vendor, long>().Update(vendor);
+            await _unitOfWork.SaveChangesAsync();
+
+            return _attachmentService.ToAbsoluteUrl(relativeUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to generate the Vendor Partnership Agreement for vendor {VendorId} (triggered by booking {BookingId}).",
+                vendor.Id, triggeringBookingId);
+            return null;
+        }
+    }
+
+    private static string BuildDataJson(object payload) => JsonSerializer.Serialize(payload, NotificationDataJsonOptions);
 
     private static async Task NotifyBestEffortAsync(Func<Task> notify)
     {

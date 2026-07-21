@@ -23,6 +23,8 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
         builder.Property(booking => booking.DisputeStatus)
             .HasConversion<string>()
             .HasMaxLength(20);
+        builder.Property(booking => booking.ContractId).HasMaxLength(50);
+        builder.Property(booking => booking.ContractDocumentUrl).HasMaxLength(500);
         builder.Property(booking => booking.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(booking => booking.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
 

@@ -15,6 +15,11 @@ namespace Planura.Infrastructure.AttachementService
 
         private readonly List<string> _allowedExtentions = new() { ".png", ".jpg", ".jpeg" };
         private const int _allowedMaxSize = 2_097_152;
+
+        // Separate allow-list for generated documents (contracts/agreements): PDFs, larger cap.
+        private readonly List<string> _allowedDocumentExtensions = new() { ".pdf" };
+        private const int _allowedDocumentMaxSize = 10_485_760; // 10 MB
+
         private readonly IWebHostEnvironment _env;
         private readonly IHttpContextAccessor _httpContextAccessor;
 

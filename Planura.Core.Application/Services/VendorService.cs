@@ -393,13 +393,17 @@ public class VendorService : IVendorService
         AvgRating = vendor.AvgRating,
         TotalReviews = vendor.TotalReviews,
         TotalCompletedBookings = vendor.TotalCompletedBookings,
-        CreatedAt = vendor.CreatedAt
+        CreatedAt = vendor.CreatedAt,
+        PartnershipAgreementId = vendor.PartnershipAgreementId,
+        PartnershipAgreementUrl = vendor.PartnershipAgreementUrl,
+        PartnershipAgreementGeneratedAt = vendor.PartnershipAgreementGeneratedAt
     };
 
     private VendorDto ResolveImageUrls(VendorDto dto)
     {
         dto.LogoUrl = _attachmentService.ToAbsoluteUrl(dto.LogoUrl);
         dto.CoverImageUrl = _attachmentService.ToAbsoluteUrl(dto.CoverImageUrl);
+        dto.PartnershipAgreementUrl = _attachmentService.ToAbsoluteUrl(dto.PartnershipAgreementUrl);
         return dto;
     }
 
