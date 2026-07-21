@@ -772,6 +772,7 @@ public class BookingService : IBookingService
     {
         var dto = _mapper.Map<BookingRequestDto>(booking);
         dto.ContractDocumentUrl = _attachmentService.ToAbsoluteUrl(dto.ContractDocumentUrl);
+        dto.ClientName = booking.Client?.User?.FullName;
         return dto;
     }
 
@@ -924,7 +925,7 @@ public class BookingService : IBookingService
             };
 
             var document = await _contractService.GenerateBookingContractAsync(contractDto);
-            var relativeUrl = await _attachmentService.UploadBytesAsync(document.Content, document.FileName, BookingContractsFolder);
+            var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(document.Content, document.FileName, BookingContractsFolder);
 
             booking.ContractId = document.ContractId;
             booking.ContractDocumentUrl = relativeUrl;
@@ -968,7 +969,7 @@ public class BookingService : IBookingService
             };
 
             var document = await _contractService.GenerateVendorPartnershipContractAsync(partnershipDto);
-            var relativeUrl = await _attachmentService.UploadBytesAsync(document.Content, document.FileName, VendorPartnershipAgreementsFolder);
+            var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(document.Content, document.FileName, VendorPartnershipAgreementsFolder);
 
             vendor.PartnershipAgreementId = document.ContractId;
             vendor.PartnershipAgreementUrl = relativeUrl;

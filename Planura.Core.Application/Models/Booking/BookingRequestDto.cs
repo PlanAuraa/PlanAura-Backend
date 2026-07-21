@@ -7,6 +7,7 @@ public class BookingRequestDto
     public long Id { get; set; }
     public long EventPlanId { get; set; }
     public long ClientId { get; set; }
+    public string? ClientName { get; set; }
     public long VendorId { get; set; }
     public long? VendorPackageId { get; set; }
     public DateOnly EventDate { get; set; }

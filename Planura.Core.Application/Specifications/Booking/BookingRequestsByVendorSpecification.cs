@@ -10,6 +10,7 @@ public class BookingRequestsByVendorSpecification : BaseSpecification<BookingReq
     public BookingRequestsByVendorSpecification(long vendorId, BookingStatus? status, int? skip, int? take)
         : base(BuildCriteria(vendorId, status))
     {
+        AddInclude(booking => booking.Client.User);
         ApplyOrderByDescending(booking => booking.CreatedAt);
 
         if (skip is not null && take is not null)
