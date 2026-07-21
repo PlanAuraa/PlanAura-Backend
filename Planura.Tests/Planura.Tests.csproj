@@ -27,6 +27,7 @@
     <ProjectReference Include="..\Planura.Core.Application\Planura.Core.Application.csproj" />
     <ProjectReference Include="..\Planura.Core.Application.Abstraction\Planura.Core.Application.Abstraction.csproj" />
     <ProjectReference Include="..\Planura.Core.Domain\Planura.Core.Domain.csproj" />
+    <ProjectReference Include="..\Planura.Infrastructure\Planura.Infrastructure.csproj" />
     <ProjectReference Include="..\Planura.Shared\Planura.Shared.csproj" />
   </ItemGroup>
 

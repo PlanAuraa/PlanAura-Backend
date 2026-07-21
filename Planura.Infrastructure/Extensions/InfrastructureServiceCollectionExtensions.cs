@@ -14,9 +14,11 @@ using Planura.Infrastructure.Authorization;
 using Planura.Core.Application.Abstraction.AttachementService;
 using Planura.Core.Application.Abstraction.AiChat;
 using Planura.Core.Application.Abstraction.Contract;
+using Planura.Core.Application.Abstraction.AiVisualizer;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Abstraction.WhatsApp;
 using Planura.Infrastructure.AiChat;
+using Planura.Infrastructure.AiVisualizer;
 using Planura.Infrastructure.AttachementService;
 using Planura.Infrastructure.Contract;
 using Planura.Infrastructure.Options;
@@ -46,6 +48,7 @@ public static class InfrastructureServiceCollectionExtensions
         {
             client.Timeout = TimeSpan.FromSeconds(90);
         });
+        services.AddHttpClient<IHuggingFaceApiService, HuggingFaceApiService>();
         services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;

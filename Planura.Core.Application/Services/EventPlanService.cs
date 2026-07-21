@@ -68,6 +68,37 @@ public class EventPlanService : IEventPlanService
         return _mapper.Map<EventPlanDto>(eventPlan);
     }
 
+    public async Task<EventPlanDto> UpdateEventPlanAsync(long eventPlanId, long clientUserId, UpdateEventPlanDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.EventType))
+        {
+            throw new BadRequestExeption("Event type is required.");
+        }
+
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var repo = _unitOfWork.Repository<EventPlan, long>();
+        var eventPlan = await repo.GetAsync(eventPlanId);
+        if (eventPlan is null || eventPlan.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(EventPlan), eventPlanId);
+        }
+
+        eventPlan.Title = dto.Title;
+        eventPlan.EventType = dto.EventType;
+        eventPlan.EventDate = dto.EventDate;
+        eventPlan.City = dto.City;
+        eventPlan.GuestCount = dto.GuestCount;
+        eventPlan.BudgetTotal = dto.BudgetTotal;
+        eventPlan.StyleNotes = dto.StyleNotes;
+        eventPlan.UpdatedAt = DateTimeOffset.UtcNow;
+
+        repo.Update(eventPlan);
+        await _unitOfWork.SaveChangesAsync();
+
+        return _mapper.Map<EventPlanDto>(eventPlan);
+    }
+
     public async Task DeleteEventPlanAsync(long eventPlanId, long clientUserId)
     {
         var clientId = await ResolveClientIdAsync(clientUserId);

@@ -46,6 +46,13 @@ public class EventPlansController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPut("{id:long}")]
+    public async Task<ActionResult<EventPlanDto>> Update(long id, [FromBody] UpdateEventPlanDto dto)
+    {
+        var result = await _eventPlanService.UpdateEventPlanAsync(id, CurrentUserId, dto);
+        return Ok(result);
+    }
+
     [HttpDelete("{id:long}")]
     public async Task<ActionResult> Delete(long id)
     {

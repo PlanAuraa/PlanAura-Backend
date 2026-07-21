@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Planura.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    partial class PlanuraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260720161220_add-resetcode-and-expiretime")]
+    partial class addresetcodeandexpiretime
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -513,20 +516,6 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("completed_at");
-
-                    b.Property<string>("ContractDocumentUrl")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)")
-                        .HasColumnName("contract_document_url");
-
-                    b.Property<DateTimeOffset?>("ContractGeneratedAt")
-                        .HasColumnType("datetimeoffset")
-                        .HasColumnName("contract_generated_at");
-
-                    b.Property<string>("ContractId")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)")
-                        .HasColumnName("contract_id");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
@@ -1333,20 +1322,6 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasPrecision(9, 6)
                         .HasColumnType("decimal(9,6)")
                         .HasColumnName("longitude");
-
-                    b.Property<DateTimeOffset?>("PartnershipAgreementGeneratedAt")
-                        .HasColumnType("datetimeoffset")
-                        .HasColumnName("partnership_agreement_generated_at");
-
-                    b.Property<string>("PartnershipAgreementId")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)")
-                        .HasColumnName("partnership_agreement_id");
-
-                    b.Property<string>("PartnershipAgreementUrl")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)")
-                        .HasColumnName("partnership_agreement_url");
 
                     b.Property<int>("TotalCompletedBookings")
                         .HasColumnType("int")

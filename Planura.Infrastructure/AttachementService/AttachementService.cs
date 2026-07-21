@@ -52,26 +52,21 @@ namespace Planura.Infrastructure.AttachementService
             return $"images/{folderName}/{fileName}";
         }
 
-        public async Task<string?> UploadBytesAsync(byte[] content, string fileName, string folderName)
+        public async Task<string?> UploadGeneratedFileAsync(byte[] fileBytes, string fileExtension, string folderName)
         {
-            var extention = Path.GetExtension(fileName);
+            if (fileBytes.Length == 0)
+                throw new BadRequestExeption("Generated file is empty.");
 
-            if (!_allowedDocumentExtensions.Contains(extention))
-                throw new BadRequestExeption($"File extension '{extention}' is not allowed. Allowed: {string.Join(", ", _allowedDocumentExtensions)}");
-
-            if (content.LongLength > _allowedDocumentMaxSize)
-                throw new BadRequestExeption("File size exceeds the maximum allowed size (10 MB).");
-
-            var folderPath = Path.Combine(_env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot"), "documents", folderName);
+            var folderPath = Path.Combine(_env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot"), "images", folderName);
             if (!Directory.Exists(folderPath))
                 Directory.CreateDirectory(folderPath);
 
-            var savedFileName = $"{Guid.NewGuid():N}{extention}";
-            var filePath = Path.Combine(folderPath, savedFileName);
+            var fileName = $"{Guid.NewGuid():N}{fileExtension}";
+            var filePath = Path.Combine(folderPath, fileName);
 
-            await File.WriteAllBytesAsync(filePath, content);
+            await File.WriteAllBytesAsync(filePath, fileBytes);
 
-            return $"documents/{folderName}/{savedFileName}";
+            return $"images/{folderName}/{fileName}";
         }
 
         public string? ToAbsoluteUrl(string? relativePath)

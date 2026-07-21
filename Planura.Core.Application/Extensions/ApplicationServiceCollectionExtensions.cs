@@ -10,11 +10,14 @@ using Planura.Core.Application.Services.AdminPayment;
 using Planura.Core.Application.Services.AdminReport;
 using Planura.Core.Application.Services.AdminVendor;
 using Planura.Core.Application.Services.AiChat;
+using Planura.Core.Application.Services.AiVisualizer;
 using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Core.Application.Services.CategoryService;
 using Planura.Core.Application.Services.Contract;
+using Planura.Core.Application.Services.Emails;
+using Planura.Shared.Settings;
 using System.Reflection;
 
 namespace Planura.Core.Application.Extensions;
@@ -27,6 +30,7 @@ public static class ApplicationServiceCollectionExtensions
         services.Configure<BookingOptions>(configuration.GetSection(BookingOptions.SectionName));
         services.Configure<StripeOptions>(configuration.GetSection(StripeOptions.SectionName));
         services.Configure<OpenAiOptions>(configuration.GetSection(OpenAiOptions.SectionName));
+        services.Configure<HuggingFaceOptions>(configuration.GetSection(HuggingFaceOptions.SectionName));
         services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
         services.Configure<GeminiOptions>(configuration.GetSection(GeminiOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
@@ -43,6 +47,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IEventPlanService, EventPlanService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IAiChatService, AiChatService>();
+        services.AddScoped<IAiVisualizerService, AiVisualizerService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
         services.AddScoped<IAdminPaymentService, AdminPaymentService>();
@@ -51,6 +56,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminClientService, AdminClientService>();
         services.AddScoped<IAdminReportService, AdminReportService>();
         services.AddScoped<IContractService, ContractService>();
+        services.AddTransient(typeof(IEmailService), typeof(EmailService));
+        services.Configure<MailSettings>(configuration.GetSection("MailSettings"));
+
         return services;
     }
 }
