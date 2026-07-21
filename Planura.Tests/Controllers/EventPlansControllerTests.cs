@@ -91,6 +91,36 @@ public class EventPlansControllerTests
     }
 
     [Fact]
+    public async Task Update_Valid_ReturnsOkWithDto()
+    {
+        var dto = new UpdateEventPlanDto { EventType = "Wedding" };
+        var expected = CreateDto();
+
+        _eventPlanServiceMock
+            .Setup(s => s.UpdateEventPlanAsync(1, CurrentUserId, dto))
+            .ReturnsAsync(expected);
+
+        var controller = CreateController();
+        var result = await controller.Update(1, dto);
+
+        var okResult = Assert.IsType<OkObjectResult>(result.Result);
+        Assert.Equal(expected, okResult.Value);
+    }
+
+    [Fact]
+    public async Task Update_NotFound_PropagatesException()
+    {
+        var dto = new UpdateEventPlanDto { EventType = "Wedding" };
+        _eventPlanServiceMock
+            .Setup(s => s.UpdateEventPlanAsync(1, CurrentUserId, dto))
+            .ThrowsAsync(new NotFoundExeption("EventPlan", 1));
+
+        var controller = CreateController();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => controller.Update(1, dto));
+    }
+
+    [Fact]
     public async Task Delete_Valid_ReturnsNoContent()
     {
         _eventPlanServiceMock

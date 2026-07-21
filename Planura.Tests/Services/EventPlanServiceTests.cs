@@ -149,6 +149,83 @@ public class EventPlanServiceTests
         Assert.Equal(ClientId, result.ClientId);
     }
 
+    // ---------------- UpdateEventPlanAsync ----------------
+
+    [Fact]
+    public async Task UpdateEventPlanAsync_MissingEventType_ThrowsBadRequest()
+    {
+        var service = CreateService();
+        var dto = new UpdateEventPlanDto { EventType = "" };
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.UpdateEventPlanAsync(EventPlanId, ClientUserId, dto));
+    }
+
+    [Fact]
+    public async Task UpdateEventPlanAsync_NotFound_ThrowsNotFound()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync((EventPlan?)null);
+
+        var service = CreateService();
+        var dto = new UpdateEventPlanDto { EventType = "Wedding" };
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.UpdateEventPlanAsync(EventPlanId, ClientUserId, dto));
+    }
+
+    [Fact]
+    public async Task UpdateEventPlanAsync_OwnedByAnotherClient_ThrowsNotFound()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan(clientId: 999));
+
+        var service = CreateService();
+        var dto = new UpdateEventPlanDto { EventType = "Wedding" };
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.UpdateEventPlanAsync(EventPlanId, ClientUserId, dto));
+    }
+
+    [Fact]
+    public async Task UpdateEventPlanAsync_Valid_UpdatesFieldsAndReturnsDto()
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlan = CreateEventPlan();
+        eventPlan.Title = "Old Title";
+        eventPlan.City = "Alexandria";
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(eventPlan);
+
+        var service = CreateService();
+        var dto = new UpdateEventPlanDto
+        {
+            Title = "New Title",
+            EventType = "Birthday",
+            EventDate = new DateOnly(2026, 9, 1),
+            City = "Cairo",
+            GuestCount = 80,
+            BudgetTotal = 25000m,
+            StyleNotes = "Rustic theme"
+        };
+
+        var result = await service.UpdateEventPlanAsync(EventPlanId, ClientUserId, dto);
+
+        Assert.Equal("New Title", eventPlan.Title);
+        Assert.Equal("Birthday", eventPlan.EventType);
+        Assert.Equal(new DateOnly(2026, 9, 1), eventPlan.EventDate);
+        Assert.Equal("Cairo", eventPlan.City);
+        Assert.Equal(80, eventPlan.GuestCount);
+        Assert.Equal(25000m, eventPlan.BudgetTotal);
+        Assert.Equal("Rustic theme", eventPlan.StyleNotes);
+
+        eventPlanRepo.Verify(r => r.Update(eventPlan), Times.Once);
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        Assert.Equal(EventPlanId, result.Id);
+        Assert.Equal("New Title", result.Title);
+        Assert.Equal("Birthday", result.EventType);
+    }
+
     // ---------------- DeleteEventPlanAsync ----------------
 
     [Fact]
