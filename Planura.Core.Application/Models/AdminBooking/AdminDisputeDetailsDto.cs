@@ -30,6 +30,13 @@ namespace Planura.Core.Application.Models.AdminBooking
         /// vendor reply) and must not be mistaken for it - see AdminDashboardImplementationReview.md Bug #2.
         /// </summary>
         public string? DisputeReason { get; set; }
+
+        /// <summary>
+        /// "Client" or "Vendor" - either side of a booking can raise a dispute, so the admin needs to
+        /// know which one is complaining before reading DisputeReason. Null for disputes raised before
+        /// DisputedByUserId was recorded, or if that user is neither party.
+        /// </summary>
+        public string? DisputeRaisedBy { get; set; }
         public string? ResolutionNotes { get; set; }
         public long? ResolvedByAdminId { get; set; }
         public string? ResolvedByAdminName { get; set; }

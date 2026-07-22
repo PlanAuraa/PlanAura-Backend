@@ -39,6 +39,19 @@ public class VendorBookingRequestsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Vendor-side "report a problem". Routed under incoming/ rather than mirroring the client's
+    /// {id}/dispute because BookingRequestsController shares the api/booking-requests prefix - two
+    /// actions on the same template would be an ambiguous match, since the ClientOnly/VendorOnly
+    /// policies gate authorization, not routing.
+    /// </summary>
+    [HttpPost("incoming/{id:long}/dispute")]
+    public async Task<ActionResult<BookingRequestDto>> Dispute(long id, [FromBody] FlagDisputeDto dto)
+    {
+        var result = await _bookingService.FlagDisputeAsync(id, CurrentUserId, dto.Reason);
+        return Ok(result);
+    }
+
     [HttpPost("{id:long}/accept")]
     public async Task<ActionResult<BookingRequestDto>> Accept(long id)
     {
