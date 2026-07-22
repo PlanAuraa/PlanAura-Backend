@@ -46,6 +46,13 @@ public class MappingProfile : Profile
             .ForMember(d => d.BookingId, opt => opt.MapFrom(s => s.Id))
             .ForMember(d => d.BookingStatus, opt => opt.MapFrom(s => s.Status))
             .ForMember(
+    d => d.DisputeRaisedBy,
+    opt => opt.MapFrom(s =>
+        s.DisputedByUserId == null ? null
+        : s.DisputedByUserId == s.Client.UserId ? "Client"
+        : s.DisputedByUserId == s.Vendor.UserId ? "Vendor"
+        : null))
+            .ForMember(
     d => d.ClientName,
     opt => opt.MapFrom(s => s.Client.User.FullName))
             .ForMember(

@@ -182,7 +182,7 @@ public class VendorService : IVendorService
         }
 
         var bookings = (await _unitOfWork.Repository<BookingRequest, long>()
-            .GetAllWithSpecAsync(new BookingRequestsByVendorSpecification(vendorId, null, null, null))).ToList();
+            .GetAllWithSpecAsync(new BookingRequestsByVendorSpecification(vendorId, null, null, false, null, null))).ToList();
 
         var completedPayments = await _unitOfWork.Repository<Payment, long>()
             .GetAllWithSpecAsync(new PaymentsByVendorSpecification(vendorId, PaymentStatus.Completed));

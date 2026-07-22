@@ -7,8 +7,14 @@ namespace Planura.Core.Application.Specifications;
 
 public class BookingRequestsByVendorSpecification : BaseSpecification<BookingRequest>
 {
-    public BookingRequestsByVendorSpecification(long vendorId, BookingStatus? status, int? skip, int? take)
-        : base(BuildCriteria(vendorId, status))
+    public BookingRequestsByVendorSpecification(
+        long vendorId,
+        BookingStatus? status,
+        BookingPaymentStatus? paymentStatus,
+        bool excludeRefunded,
+        int? skip,
+        int? take)
+        : base(BuildCriteria(vendorId, status, paymentStatus, excludeRefunded))
     {
         AddInclude(booking => booking.Client.User);
         ApplyOrderByDescending(booking => booking.CreatedAt);
@@ -19,10 +25,22 @@ public class BookingRequestsByVendorSpecification : BaseSpecification<BookingReq
         }
     }
 
-    private static Expression<Func<BookingRequest, bool>> BuildCriteria(long vendorId, BookingStatus? status)
+    /// <summary>
+    /// Status and payment status are independent axes - a refunded booking keeps its original
+    /// BookingStatus (Accepted/Completed/...) - so both predicates are applied when both are given.
+    /// <paramref name="excludeRefunded"/> is what makes a status filter exclusive: without it, a
+    /// status filter also returns the refunded bookings that still carry that status.
+    /// </summary>
+    private static Expression<Func<BookingRequest, bool>> BuildCriteria(
+        long vendorId,
+        BookingStatus? status,
+        BookingPaymentStatus? paymentStatus,
+        bool excludeRefunded)
     {
-        return status is null
-            ? booking => booking.VendorId == vendorId
-            : booking => booking.VendorId == vendorId && booking.Status == status.Value;
+        return booking =>
+            booking.VendorId == vendorId
+            && (status == null || booking.Status == status)
+            && (paymentStatus == null || booking.PaymentStatus == paymentStatus)
+            && (!excludeRefunded || booking.PaymentStatus != BookingPaymentStatus.Refunded);
     }
 }

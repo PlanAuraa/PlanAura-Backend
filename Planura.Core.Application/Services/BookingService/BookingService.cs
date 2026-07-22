@@ -642,10 +642,12 @@ public class BookingService : IBookingService
         var repo = _unitOfWork.Repository<BookingRequest, long>();
 
         var totalCount = await repo.GetCountAsync(
-            new BookingRequestsByVendorSpecification(vendorId, filter.Status, skip: null, take: null));
+            new BookingRequestsByVendorSpecification(
+                vendorId, filter.Status, filter.PaymentStatus, filter.ExcludeRefunded, skip: null, take: null));
 
         var items = await repo.GetAllWithSpecAsync(
-            new BookingRequestsByVendorSpecification(vendorId, filter.Status, skip, pageSize));
+            new BookingRequestsByVendorSpecification(
+                vendorId, filter.Status, filter.PaymentStatus, filter.ExcludeRefunded, skip, pageSize));
 
         return new PagedResult<BookingRequestDto>
         {
@@ -677,11 +679,9 @@ public class BookingService : IBookingService
             throw new BadRequestExeption("A dispute reason is required.");
         }
 
-        var clientId = await ResolveClientIdAsync(userId);
-
         var repo = _unitOfWork.Repository<BookingRequest, long>();
         var booking = await repo.GetAsync(bookingRequestId);
-        if (booking is null || booking.ClientId != clientId)
+        if (booking is null || !await IsBookingParticipantAsync(booking, userId))
         {
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
         }
@@ -717,6 +717,26 @@ public class BookingService : IBookingService
         await _unitOfWork.SaveChangesAsync();
 
         return MapBooking(booking);
+    }
+
+    /// <summary>
+    /// Either side of a booking may raise a dispute, so this accepts the booking's client *or* its
+    /// vendor. The client is checked first and short-circuits, since that is the common case and it
+    /// avoids a second lookup. Callers treat a false result as "not found" rather than "forbidden",
+    /// so a user cannot probe for booking ids that aren't theirs.
+    /// </summary>
+    private async Task<bool> IsBookingParticipantAsync(BookingRequest booking, long userId)
+    {
+        var client = await _unitOfWork.Repository<Client, long>()
+            .GetWithSpecAsync(new ClientByUserIdSpecification(userId));
+        if (client is not null && booking.ClientId == client.Id)
+        {
+            return true;
+        }
+
+        var vendor = await _unitOfWork.Repository<Vendor, long>()
+            .GetWithSpecAsync(new VendorByUserIdSpecification(userId));
+        return vendor is not null && booking.VendorId == vendor.Id;
     }
 
     private async Task<long> ResolveClientIdAsync(long userId)
