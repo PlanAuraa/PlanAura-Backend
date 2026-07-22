@@ -46,10 +46,9 @@ public class ReviewService : IReviewService
             throw new NotFoundExeption(nameof(BookingRequest), dto.BookingRequestId);
         }
 
-        if (booking.Status is not (BookingStatus.Accepted or BookingStatus.Completed))
+        if (booking.Status != BookingStatus.Completed)
         {
-            throw new BadRequestExeption(
-                "You can only review a booking that the vendor accepted or that has been completed.");
+            throw new BadRequestExeption("You can only review a booking that has been completed.");
         }
 
         var reviewRepo = _unitOfWork.Repository<Review, long>();
@@ -72,6 +71,33 @@ public class ReviewService : IReviewService
         await _unitOfWork.SaveChangesAsync();
 
         await RecomputeVendorRatingAsync(booking.VendorId);
+
+        return GetReviewById(review.Id);
+    }
+
+    public async Task<ReviewDto> UpdateReviewAsync(long clientUserId, long reviewId, UpdateReviewDto dto)
+    {
+        if (dto.Rating is < 1 or > 5)
+        {
+            throw new BadRequestExeption("Rating must be between 1 and 5.");
+        }
+
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var reviewRepo = _unitOfWork.Repository<Review, long>();
+        var review = await reviewRepo.GetAsync(reviewId);
+        if (review is null || review.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(Review), reviewId);
+        }
+
+        review.Rating = (short)dto.Rating;
+        review.Comment = string.IsNullOrWhiteSpace(dto.Comment) ? null : dto.Comment.Trim();
+        review.UpdatedAt = DateTimeOffset.UtcNow;
+        reviewRepo.Update(review);
+        await _unitOfWork.SaveChangesAsync();
+
+        await RecomputeVendorRatingAsync(review.VendorId);
 
         return GetReviewById(review.Id);
     }
