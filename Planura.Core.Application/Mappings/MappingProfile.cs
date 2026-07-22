@@ -19,7 +19,10 @@ public class MappingProfile : Profile
 
         CreateMap<VendorAvailability, VendorAvailabilityDto>();
 
-        CreateMap<BookingRequest, BookingRequestDto>();
+        CreateMap<BookingRequest, BookingRequestDto>()
+            .ForMember(d => d.ReviewId, opt => opt.MapFrom(s => s.Review != null ? s.Review.Id : (long?)null))
+            .ForMember(d => d.ReviewRating, opt => opt.MapFrom(s => s.Review != null ? (int?)s.Review.Rating : null))
+            .ForMember(d => d.ReviewComment, opt => opt.MapFrom(s => s.Review != null ? s.Review.Comment : null));
 
         CreateMap<EventPlan, EventPlanDto>();
 

@@ -11,6 +11,7 @@ public class BookingRequestsByClientSpecification : BaseSpecification<BookingReq
         : base(BuildCriteria(clientId, status))
     {
         AddInclude(booking => booking.Client.User);
+        AddInclude(booking => booking.Review!);
         ApplyOrderByDescending(booking => booking.CreatedAt);
 
         if (skip is not null && take is not null)
