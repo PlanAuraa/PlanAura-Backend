@@ -24,7 +24,7 @@ public class VendorAvailabilityService : IVendorAvailabilityService
     public async Task<IEnumerable<VendorAvailabilityDto>> GetAllAsync()
     {
         var slots = await _unitOfWork.Repository<VendorAvailability, long>().GetAllAsync();
-        return _mapper.Map<IEnumerable<VendorAvailabilityDto>>(slots);
+        return MapWithComputedStatus(slots);
     }
 
     public async Task<IEnumerable<VendorAvailabilityDto>> GetByVendorAsync(long vendorId)
@@ -34,13 +34,13 @@ public class VendorAvailabilityService : IVendorAvailabilityService
         var slots = await _unitOfWork.Repository<VendorAvailability, long>()
             .GetAllWithSpecAsync(new VendorAvailabilityByVendorSpecification(vendorId));
 
-        return _mapper.Map<IEnumerable<VendorAvailabilityDto>>(slots);
+        return MapWithComputedStatus(slots);
     }
 
     public async Task<VendorAvailabilityDto> GetByIdAsync(long id)
     {
         var slot = await GetSlotOrThrowAsync(id, tracking: false);
-        return _mapper.Map<VendorAvailabilityDto>(slot);
+        return MapWithComputedStatus(slot);
     }
 
     public async Task<AvailabilityCheckResultDto> CheckAvailabilityAsync(AvailabilityCheckDto dto)
@@ -244,6 +244,25 @@ public class VendorAvailabilityService : IVendorAvailabilityService
                 "The requested time range overlaps with an existing availability slot for this vendor.");
         }
     }
+
+    /// <summary>
+    /// An Available slot whose start time has already passed was never booked and can no
+    /// longer be booked, so it's reported as Blocked to every consumer (vendor calendar and
+    /// client booking picker alike) without persisting the change — the underlying row is left
+    /// untouched so a StartAt edit (impossible today, but future-proof) can't be undone by this.
+    /// </summary>
+    private VendorAvailabilityDto MapWithComputedStatus(VendorAvailability slot)
+    {
+        var dto = _mapper.Map<VendorAvailabilityDto>(slot);
+        if (dto.Status == AvailabilityStatus.Available && slot.StartAt <= DateTimeOffset.UtcNow)
+        {
+            dto.Status = AvailabilityStatus.Blocked;
+        }
+        return dto;
+    }
+
+    private IEnumerable<VendorAvailabilityDto> MapWithComputedStatus(IEnumerable<VendorAvailability> slots)
+        => slots.Select(MapWithComputedStatus).ToList();
 
     private async Task<VendorAvailability> GetSlotOrThrowAsync(long id, bool tracking)
     {

@@ -596,7 +596,8 @@ public class BookingService : IBookingService
     {
         var clientId = await ResolveClientIdAsync(clientUserId);
 
-        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        var booking = await _unitOfWork.Repository<BookingRequest, long>()
+            .GetWithSpecAsync(new BookingRequestByIdSpecification(bookingRequestId));
         if (booking is null || booking.ClientId != clientId)
         {
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
@@ -659,7 +660,8 @@ public class BookingService : IBookingService
     {
         var vendorId = await ResolveVendorIdAsync(vendorUserId);
 
-        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        var booking = await _unitOfWork.Repository<BookingRequest, long>()
+            .GetWithSpecAsync(new BookingRequestByIdSpecification(bookingRequestId));
         if (booking is null || booking.VendorId != vendorId)
         {
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
