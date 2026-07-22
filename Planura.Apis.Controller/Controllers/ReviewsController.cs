@@ -67,6 +67,14 @@ public class ReviewsController : ControllerBase
         return Ok(await _reviewService.CreateReviewAsync(CurrentUserId, dto));
     }
 
+    /// <summary>A client edits their own existing review (rating/comment only — one review per booking is unchanged).</summary>
+    [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
+    [HttpPatch("{reviewId:long}")]
+    public async Task<ActionResult<ReviewDto>> Update(long reviewId, [FromBody] UpdateReviewDto dto)
+    {
+        return Ok(await _reviewService.UpdateReviewAsync(CurrentUserId, reviewId, dto));
+    }
+
     /// <summary>The vendor replies (once) to a review left for them.</summary>
     [Authorize(Policy = AuthorizationPolicies.VendorOnly)]
     [HttpPost("{reviewId:long}/response")]

@@ -9,5 +9,6 @@ public class VendorAvailabilityByIdSpecification : BaseSpecification<VendorAvail
         : base(availability => availability.Id == id)
     {
         AddInclude(availability => availability.Vendor);
+        AddInclude(availability => availability.BookingRequest!);
     }
 }

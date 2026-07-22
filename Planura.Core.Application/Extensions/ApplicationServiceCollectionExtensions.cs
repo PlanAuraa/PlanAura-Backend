@@ -13,6 +13,7 @@ using Planura.Core.Application.Services.AiChat;
 using Planura.Core.Application.Services.AiVisualizer;
 using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
+using Planura.Core.Application.Services.BookingAutoCompleteJob;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Core.Application.Services.CategoryService;
 using Planura.Core.Application.Services.Contract;
@@ -50,6 +51,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAiVisualizerService, AiVisualizerService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
+        services.AddScoped<IBookingAutoCompleteJob, BookingAutoCompleteJob>();
         services.AddScoped<IAdminPaymentService, AdminPaymentService>();
         services.AddScoped<IAdminBookingService, AdminBookingService>();
         services.AddScoped<IAdminVendorService, AdminVendorService>();

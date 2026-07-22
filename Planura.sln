@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.36915.13 d17.14
+# Visual Studio Version 18
+VisualStudioVersion = 18.6.11822.322 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Src", "Src", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 EndProject
@@ -28,8 +28,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Planura.Infrastructure.Persistence", "Planura.Infrastructure.Persistence\Planura.Infrastructure.Persistence.csproj", "{0054839C-DF83-44A2-B647-157DC15EEE03}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Planura.Shared", "Planura.Shared\Planura.Shared.csproj", "{D79DFC36-342C-47A2-B49B-333AE1C6B272}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Planura.Tests", "Planura.Tests\Planura.Tests.csproj", "{7A6B5C4D-3E2F-4190-8A7B-6C5D4E3F2A1B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -69,10 +67,6 @@ Global
 		{D79DFC36-342C-47A2-B49B-333AE1C6B272}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D79DFC36-342C-47A2-B49B-333AE1C6B272}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D79DFC36-342C-47A2-B49B-333AE1C6B272}.Release|Any CPU.Build.0 = Release|Any CPU
-		{7A6B5C4D-3E2F-4190-8A7B-6C5D4E3F2A1B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{7A6B5C4D-3E2F-4190-8A7B-6C5D4E3F2A1B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{7A6B5C4D-3E2F-4190-8A7B-6C5D4E3F2A1B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{7A6B5C4D-3E2F-4190-8A7B-6C5D4E3F2A1B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

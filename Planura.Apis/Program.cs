@@ -4,6 +4,7 @@ using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
+using Planura.Core.Application.Services.BookingAutoCompleteJob;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
 using Planura.Infrastructure.Extensions;
 using Planura.Infrastructure.Persistence.Extensions;
@@ -88,6 +89,11 @@ using (var scope = app.Services.CreateScope())
         "booking-hold-expiry",
         job => job.RunAsync(),
         "*/15 * * * *");
+
+    recurringJobs.AddOrUpdate<IBookingAutoCompleteJob>(
+        "booking-auto-complete",
+        job => job.RunAsync(),
+        "0 3 * * *");
 }
 
 
