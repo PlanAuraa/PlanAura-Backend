@@ -84,6 +84,11 @@ public class BookingService : IBookingService
 
         if (slot.Status != AvailabilityStatus.Available)
         {
+            if (slot.BookingRequest is not null && slot.BookingRequest.ClientId == clientId)
+            {
+                throw new SlotUnavailableExeption("You already have a booking for this exact time slot.");
+            }
+
             throw new SlotUnavailableExeption(
                 $"Slot {dto.AvailabilityId} is no longer available for booking.");
         }

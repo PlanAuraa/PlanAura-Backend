@@ -99,7 +99,8 @@ public class VendorService : IVendorService
 
         var queryable = _unitOfWork.Repository<Vendor, long>().GetQueryable()
             .Where(vendor => vendor.VerificationStatus == VerificationStatus.Verified
-                || vendor.VerificationStatus == VerificationStatus.Trusted);
+                || vendor.VerificationStatus == VerificationStatus.Trusted)
+            .Where(vendor => vendor.Packages.Any(package => package.IsActive));
 
         if (!string.IsNullOrWhiteSpace(filter.Category))
         {
