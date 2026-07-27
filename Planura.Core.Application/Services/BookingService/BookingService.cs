@@ -710,7 +710,7 @@ public class BookingService : IBookingService
             PreviousStatus = booking.Status.ToString(),
             NewStatus = booking.Status.ToString(),
             ChangedByUserId = userId,
-            Notes = $"Dispute raised: {reason}"
+            Notes = $"{BookingStatusHistoryNotes.DisputeRaisedPrefix}{reason}"
         };
         await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
 
