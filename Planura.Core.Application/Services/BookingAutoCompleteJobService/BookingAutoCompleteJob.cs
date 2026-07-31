@@ -40,6 +40,20 @@ public class BookingAutoCompleteJob : IBookingAutoCompleteJob
                 booking.UpdatedAt = now;
                 _unitOfWork.Repository<BookingRequest, long>().Update(booking);
 
+                // Keep the vendor's denormalized completed-bookings counter in step with the status
+                // change - it drives "events completed" on the public profile and dashboard. This job
+                // is the only path that moves a booking into Completed, and each booking completes
+                // exactly once, so a single increment inside this transaction is exact (mirrors how
+                // ReviewService maintains TotalReviews/AvgRating). A recompute-from-source would miss
+                // this very booking, since its status isn't flushed until CommitTransactionAsync.
+                var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+                if (vendor is not null)
+                {
+                    vendor.TotalCompletedBookings += 1;
+                    vendor.UpdatedAt = now;
+                    _unitOfWork.Repository<Vendor, long>().Update(vendor);
+                }
+
                 var history = new BookingStatusHistory
                 {
                     BookingRequestId = booking.Id,

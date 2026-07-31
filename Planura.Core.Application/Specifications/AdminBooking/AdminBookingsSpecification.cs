@@ -36,7 +36,9 @@ namespace Planura.Core.Application.Specifications.AdminBooking
 )
         )
         {
-            AddInclude(b => b.Client);
+            // ClientName maps from Client.User.FullName, so the User has to be included too - not just
+            // Client. VendorName reads Vendor.BusinessName directly, so Vendor alone is enough there.
+            AddInclude(b => b.Client.User);
             AddInclude(b => b.Vendor);
             AddInclude(b => b.VendorPackage);
             ApplyOrderByDescending(b => b.CreatedAt);
