@@ -12,6 +12,7 @@ using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Infrastructure.Authorization;
 using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Abstraction.BookingAgreement;
 using Planura.Core.Application.Abstraction.AiChat;
 using Planura.Core.Application.Abstraction.Contract;
 using Planura.Core.Application.Abstraction.AiVisualizer;
@@ -20,6 +21,7 @@ using Planura.Core.Application.Abstraction.WhatsApp;
 using Planura.Infrastructure.AiChat;
 using Planura.Infrastructure.AiVisualizer;
 using Planura.Infrastructure.AttachementService;
+using Planura.Infrastructure.BookingAgreement;
 using Planura.Infrastructure.Contract;
 using Planura.Infrastructure.Options;
 using Planura.Infrastructure.PaymentGateway;
@@ -36,6 +38,10 @@ public static class InfrastructureServiceCollectionExtensions
         var jwtOptions = configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 
         services.AddHttpContextAccessor();
+        services.AddMemoryCache();
+        // Singleton: the store is a process-wide, thread-safe cache bridging preview -> create; it holds
+        // no per-request state of its own (the client id lives inside each entry).
+        services.AddSingleton<IAgreementPreviewStore, MemoryAgreementPreviewStore>();
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<IAuthorizationHandler, ApprovedVendorHandler>();

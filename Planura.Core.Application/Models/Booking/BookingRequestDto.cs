@@ -31,6 +31,9 @@ public class BookingRequestDto
     public string? ContractDocumentUrl { get; set; }
     public DateTimeOffset? ContractGeneratedAt { get; set; }
 
+    public DateTimeOffset? ClientAgreedAt { get; set; }
+    public DateTimeOffset? VendorAgreedAt { get; set; }
+
     public long? ReviewId { get; set; }
     public int? ReviewRating { get; set; }
     public string? ReviewComment { get; set; }

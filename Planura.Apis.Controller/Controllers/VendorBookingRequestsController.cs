@@ -53,9 +53,9 @@ public class VendorBookingRequestsController : ControllerBase
     }
 
     [HttpPost("{id:long}/accept")]
-    public async Task<ActionResult<BookingRequestDto>> Accept(long id)
+    public async Task<ActionResult<BookingRequestDto>> Accept(long id, [FromBody] AcceptBookingRequestDto dto)
     {
-        var result = await _bookingService.AcceptBookingRequestAsync(id, CurrentUserId);
+        var result = await _bookingService.AcceptBookingRequestAsync(id, CurrentUserId, dto.AgreementAccepted);
         return Ok(result);
     }
 

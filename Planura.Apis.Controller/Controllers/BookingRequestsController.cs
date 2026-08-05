@@ -25,6 +25,18 @@ public class BookingRequestsController : ControllerBase
     private long CurrentUserId => _currentUserService.UserId
         ?? throw new UnAuthorizedExeption("No authenticated user.");
 
+    /// <summary>
+    /// Generates the Booking Agreement for the current (fixed) payment-step details so the client can
+    /// review it before confirming. Returns a token that <see cref="Create"/> redeems to bind that
+    /// exact contract to the new booking.
+    /// </summary>
+    [HttpPost("agreement-preview")]
+    public async Task<ActionResult<AgreementPreviewResultDto>> PreviewAgreement([FromBody] AgreementPreviewRequestDto dto)
+    {
+        var result = await _bookingService.PreviewBookingAgreementAsync(CurrentUserId, dto);
+        return Ok(result);
+    }
+
     [HttpPost]
     public async Task<ActionResult<BookingRequestDto>> Create([FromBody] CreateBookingRequestDto dto)
     {

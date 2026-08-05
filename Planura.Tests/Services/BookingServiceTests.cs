@@ -2,8 +2,11 @@ using AutoMapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Abstraction.BookingAgreement;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
+using Planura.Core.Application.Services.Contract;
 using Planura.Core.Application.Mappings;
 using Planura.Core.Application.Models;
 using Planura.Core.Application.Services;
@@ -28,9 +31,14 @@ public class BookingServiceTests
     private const long PackageId = 99;
     private const decimal PackagePrice = 5000m;
 
+    private const string AgreementToken = "agreement-token";
+
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<INotificationService> _notificationServiceMock = new();
     private readonly Mock<IPaymentGatewayService> _paymentGatewayServiceMock = new();
+    private readonly Mock<IContractService> _contractServiceMock = new();
+    private readonly Mock<IAttachmentService> _attachmentServiceMock = new();
+    private readonly Mock<IAgreementPreviewStore> _agreementPreviewStoreMock = new();
     private readonly IMapper _mapper = new MapperConfiguration(
         cfg => cfg.AddProfile<MappingProfile>(),
         NullLoggerFactory.Instance).CreateMapper();
@@ -40,6 +48,9 @@ public class BookingServiceTests
         _mapper,
         _notificationServiceMock.Object,
         _paymentGatewayServiceMock.Object,
+        _contractServiceMock.Object,
+        _attachmentServiceMock.Object,
+        _agreementPreviewStoreMock.Object,
         Options.Create(new BookingOptions { HoldTtlHours = 48 }),
         Options.Create(new StripeOptions
         {
@@ -61,8 +72,18 @@ public class BookingServiceTests
         VendorPackageId = vendorPackageId,
         GuestCount = guestCount,
         PaymentMethodId = paymentMethodId,
-        RequestId = requestId
+        RequestId = requestId,
+        AgreementToken = AgreementToken,
+        AgreementAccepted = true
     };
+
+    /// <summary>Makes the reviewed Booking Agreement token resolve to an entry for this client, as it
+    /// would after a preview call — required by the create happy paths.</summary>
+    private void SetupAgreementToken(long clientId = ClientId, string token = AgreementToken)
+    {
+        _agreementPreviewStoreMock.Setup(s => s.TryGet(token))
+            .Returns(new AgreementPreviewEntry(clientId, "PLN-CN-TEST", "images/booking-contracts/test.pdf", DateTimeOffset.UtcNow));
+    }
 
     private Mock<IGenericRepository<VendorPackage, long>> SetupPackageRepo(
         long vendorId = VendorId, decimal basePrice = PackagePrice, int? maxGuests = null)
@@ -78,6 +99,10 @@ public class BookingServiceTests
         _paymentGatewayServiceMock
             .Setup(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()))
             .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = paymentIntentId, ClientSecret = "secret", Status = "requires_capture" });
+
+        // Every create path that reaches authorization has also passed the reviewed-agreement gate, so
+        // give those happy paths a valid agreement token to redeem.
+        SetupAgreementToken();
     }
 
     private static Client CreateClient() => new() { Id = ClientId, UserId = ClientUserId };
@@ -131,10 +156,16 @@ public class BookingServiceTests
         repo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(client);
     }
 
-    private void SetupVendorUserRepo(Vendor? vendor)
+    private Mock<IGenericRepository<Vendor, long>> SetupVendorUserRepo(Vendor? vendor)
     {
         var repo = _unitOfWorkMock.SetupRepository<Vendor, long>();
         repo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Vendor>>())).ReturnsAsync(vendor);
+        if (vendor is not null)
+        {
+            // ProcessAcceptedBookingAsync re-loads the vendor by id after a successful accept.
+            repo.Setup(r => r.GetAsync(vendor.Id)).ReturnsAsync(vendor);
+        }
+        return repo;
     }
 
     private static Payment CreateAuthorizedPayment(string gatewayReference = "pi_test") => new()
@@ -474,6 +505,8 @@ public class BookingServiceTests
             .Setup(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()))
             .ThrowsAsync(new PaymentDeclinedExeption("Your card was declined: insufficient_funds"));
 
+        SetupAgreementToken();
+
         var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
 
         var service = CreateService();
@@ -775,7 +808,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
     }
 
     [Fact]
@@ -787,7 +820,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<NotFoundExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
     }
 
     [Fact]
@@ -799,7 +832,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
     }
 
     [Fact]
@@ -814,7 +847,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
     }
 
     [Fact]
@@ -847,12 +880,16 @@ public class BookingServiceTests
         var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
         clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
 
+        // ProcessAcceptedBookingAsync loads the vendor's user (for the one-time partnership agreement).
+        _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+
         var service = CreateService();
-        var result = await service.AcceptBookingRequestAsync(1, VendorUserId);
+        var result = await service.AcceptBookingRequestAsync(1, VendorUserId, true);
 
         Assert.Equal(BookingStatus.Accepted, booking.Status);
         Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
         Assert.NotNull(booking.RespondedAt);
+        Assert.NotNull(booking.VendorAgreedAt);
 
         Assert.Equal(PaymentStatus.Completed, payment.Status);
         Assert.NotNull(payment.PaidAt);
@@ -906,7 +943,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
 
         Assert.Equal(BookingStatus.Rejected, booking.Status);
 
@@ -963,7 +1000,7 @@ public class BookingServiceTests
 
         var service = CreateService();
 
-        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId));
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => service.AcceptBookingRequestAsync(1, VendorUserId, true));
 
         Assert.Equal(BookingStatus.Rejected, booking.Status);
         Assert.Equal(PaymentStatus.Failed, payment.Status); // void failed, so it stays at the pre-void Failed status
