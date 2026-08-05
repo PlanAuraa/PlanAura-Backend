@@ -23,10 +23,16 @@ public class BookingRequest
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
-    // AI-generated Event Booking Contract, produced once the booking is accepted/confirmed.
+    // AI-generated Event Booking Contract. Generated when the client reaches the payment step and
+    // copied onto the booking at creation (client), then reviewed as-is by the vendor before accept.
     public string? ContractId { get; set; }
     public string? ContractDocumentUrl { get; set; }
     public DateTimeOffset? ContractGeneratedAt { get; set; }
+
+    // When each party explicitly accepted the Booking Agreement above (the consent gate that
+    // precedes their existing action): the client before "Confirm & Book", the vendor before "Accept".
+    public DateTimeOffset? ClientAgreedAt { get; set; }
+    public DateTimeOffset? VendorAgreedAt { get; set; }
 
     public DisputeStatus? DisputeStatus { get; set; }
     public DateTimeOffset? DisputedAt { get; set; }

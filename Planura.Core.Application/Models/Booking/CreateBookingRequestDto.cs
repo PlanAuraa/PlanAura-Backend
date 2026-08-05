@@ -13,4 +13,13 @@ public class CreateBookingRequestDto
 
     /// <summary>Client-generated id for this submission, reused as the Stripe idempotency key to dedupe retried submits.</summary>
     public string RequestId { get; set; } = null!;
+
+    /// <summary>
+    /// Opaque token returned by the agreement-preview step, identifying the Booking Agreement the
+    /// client reviewed. Redeemed once here to copy that exact contract onto the new booking.
+    /// </summary>
+    public string AgreementToken { get; set; } = null!;
+
+    /// <summary>Must be true — the client ticked "I have read and agree to the Booking Agreement" before confirming.</summary>
+    public bool AgreementAccepted { get; set; }
 }

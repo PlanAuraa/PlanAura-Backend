@@ -2,6 +2,7 @@ using AutoMapper;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Planura.Core.Application.Abstraction.AttachementService;
+using Planura.Core.Application.Abstraction.BookingAgreement;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
@@ -39,6 +40,7 @@ public class BookingService : IBookingService
     private readonly IPaymentGatewayService _paymentGatewayService;
     private readonly IContractService _contractService;
     private readonly IAttachmentService _attachmentService;
+    private readonly IAgreementPreviewStore _agreementPreviewStore;
     private readonly BookingOptions _bookingOptions;
     private readonly StripeOptions _stripeOptions;
     private readonly ILogger<BookingService> _logger;
@@ -50,6 +52,7 @@ public class BookingService : IBookingService
         IPaymentGatewayService paymentGatewayService,
         IContractService contractService,
         IAttachmentService attachmentService,
+        IAgreementPreviewStore agreementPreviewStore,
         IOptions<BookingOptions> bookingOptions,
         IOptions<StripeOptions> stripeOptions,
         ILogger<BookingService> logger)
@@ -60,73 +63,54 @@ public class BookingService : IBookingService
         _paymentGatewayService = paymentGatewayService;
         _contractService = contractService;
         _attachmentService = attachmentService;
+        _agreementPreviewStore = agreementPreviewStore;
         _bookingOptions = bookingOptions.Value;
         _stripeOptions = stripeOptions.Value;
         _logger = logger;
     }
 
+    public async Task<AgreementPreviewResultDto> PreviewBookingAgreementAsync(long clientUserId, AgreementPreviewRequestDto dto)
+    {
+        var facts = await ResolveBookingFactsAsync(
+            clientUserId, dto.EventPlanId, dto.AvailabilityId, dto.VendorPackageId, dto.GuestCount);
+
+        var clientUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(facts.Client.UserId);
+        if (clientUser is null)
+        {
+            throw new NotFoundExeption(nameof(ApplicationUser), facts.Client.UserId);
+        }
+
+        var eventDate = DateOnly.FromDateTime(facts.Slot.StartAt.UtcDateTime);
+        var contractDto = BuildBookingContractDto(facts, clientUser, dto.GuestCount, dto.ClientMessage, eventDate);
+
+        var document = await _contractService.GenerateBookingContractAsync(contractDto);
+        var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(
+            document.Content, document.FileName, BookingContractsFolder);
+        if (relativeUrl is null)
+        {
+            throw new BadRequestExeption("The Booking Agreement could not be prepared. Please try again.");
+        }
+
+        var generatedAt = DateTimeOffset.UtcNow;
+        var token = _agreementPreviewStore.Put(
+            new AgreementPreviewEntry(facts.Client.Id, document.ContractId, relativeUrl, generatedAt));
+
+        return new AgreementPreviewResultDto
+        {
+            Token = token,
+            ContractId = document.ContractId,
+            DocumentUrl = _attachmentService.ToAbsoluteUrl(relativeUrl)!,
+            GeneratedAt = generatedAt
+        };
+    }
+
     public async Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto)
     {
-        var clientId = await ResolveClientIdAsync(clientUserId);
-
-        var eventPlan = await _unitOfWork.Repository<EventPlan, long>().GetAsync(dto.EventPlanId);
-        if (eventPlan is null || eventPlan.ClientId != clientId)
-        {
-            throw new NotFoundExeption(nameof(EventPlan), dto.EventPlanId);
-        }
-
-        var slotRepo = _unitOfWork.Repository<VendorAvailability, long>();
-        var slot = await slotRepo.GetWithSpecAsync(new VendorAvailabilityByIdSpecification(dto.AvailabilityId));
-        if (slot is null)
-        {
-            throw new NotFoundExeption(nameof(VendorAvailability), dto.AvailabilityId);
-        }
-
-        if (slot.Status != AvailabilityStatus.Available)
-        {
-            if (slot.BookingRequest is not null && slot.BookingRequest.ClientId == clientId)
-            {
-                throw new SlotUnavailableExeption("You already have a booking for this exact time slot.");
-            }
-
-            throw new SlotUnavailableExeption(
-                $"Slot {dto.AvailabilityId} is no longer available for booking.");
-        }
-
-        var vendor = slot.Vendor;
-        if (!VerificationStatus.IsApproved(vendor.VerificationStatus))
-        {
-            throw new BadRequestExeption("This vendor is not verified and cannot accept bookings.");
-        }
-
-        var vendorUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(vendor.UserId);
-        if (vendorUser is null || !vendorUser.IsActive)
-        {
-            throw new BadRequestExeption("This vendor is not currently active.");
-        }
-
-        decimal? agreedPrice = null;
-        if (dto.VendorPackageId is not null)
-        {
-            var package = await _unitOfWork.Repository<VendorPackage, long>().GetAsync(dto.VendorPackageId.Value);
-            if (package is null || package.VendorId != vendor.Id)
-            {
-                throw new NotFoundExeption(nameof(VendorPackage), dto.VendorPackageId.Value);
-            }
-
-            if (package.MaxGuests is not null && dto.GuestCount is not null && dto.GuestCount > package.MaxGuests)
-            {
-                throw new BadRequestExeption(
-                    $"Guest count exceeds the package maximum of {package.MaxGuests} guests.");
-            }
-
-            agreedPrice = package.BasePrice;
-        }
-
-        if (agreedPrice is null or <= 0)
-        {
-            throw new BadRequestExeption("A package must be selected so a price can be authorized for this booking.");
-        }
+        var facts = await ResolveBookingFactsAsync(
+            clientUserId, dto.EventPlanId, dto.AvailabilityId, dto.VendorPackageId, dto.GuestCount);
+        var slot = facts.Slot;
+        var vendor = facts.Vendor;
+        var agreedPrice = facts.AgreedPrice;
 
         if (string.IsNullOrWhiteSpace(dto.PaymentMethodId))
         {
@@ -138,19 +122,35 @@ public class BookingService : IBookingService
             throw new BadRequestExeption("A request id is required to submit a booking request.");
         }
 
+        if (!dto.AgreementAccepted)
+        {
+            throw new BadRequestExeption("You must read and agree to the Booking Agreement before confirming.");
+        }
+
+        // Redeem the Booking Agreement the client reviewed at the payment step. Peek (not remove) so a
+        // later failure — e.g. a declined card the client retries with another one — leaves the token
+        // valid; it's removed only after the booking commits. Ownership is re-checked so a token can
+        // only ever attach its own client's reviewed contract.
+        var agreement = _agreementPreviewStore.TryGet(dto.AgreementToken);
+        if (agreement is null || agreement.ClientId != facts.Client.Id)
+        {
+            throw new BadRequestExeption(
+                "Your Booking Agreement has expired. Please review the agreement again before confirming.");
+        }
+
         // Authorize the card hold before touching the database: if this fails (declined, insufficient
         // funds, etc.) no booking request or payment row is ever created — see the option (b) status
         // model discussion. The only failure window left is between this call succeeding and the
         // transaction below committing, which is handled with a compensating cancel in the catch blocks.
         var intentResult = await _paymentGatewayService.AuthorizePaymentIntentAsync(new AuthorizePaymentIntentRequest
         {
-            AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(agreedPrice.Value),
+            AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(agreedPrice),
             Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
             PaymentMethodId = dto.PaymentMethodId,
             IdempotencyKey = dto.RequestId,
             Metadata = new Dictionary<string, string>
             {
-                ["client_id"] = clientId.ToString(),
+                ["client_id"] = facts.Client.Id.ToString(),
                 ["vendor_id"] = vendor.Id.ToString(),
                 ["event_plan_id"] = dto.EventPlanId.ToString(),
                 ["availability_id"] = dto.AvailabilityId.ToString()
@@ -160,7 +160,7 @@ public class BookingService : IBookingService
         var booking = new BookingRequest
         {
             EventPlanId = dto.EventPlanId,
-            ClientId = clientId,
+            ClientId = facts.Client.Id,
             VendorId = vendor.Id,
             VendorPackageId = dto.VendorPackageId,
             EventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime),
@@ -168,14 +168,20 @@ public class BookingService : IBookingService
             AgreedPrice = agreedPrice,
             ClientMessage = dto.ClientMessage,
             Status = BookingStatus.Pending,
-            PaymentStatus = BookingPaymentStatus.Unpaid
+            PaymentStatus = BookingPaymentStatus.Unpaid,
+            // Bind the exact agreement the client reviewed (generated at the payment step) and stamp
+            // their consent. The vendor later reviews this same stored contract before accepting.
+            ContractId = agreement.ContractId,
+            ContractDocumentUrl = agreement.RelativeUrl,
+            ContractGeneratedAt = agreement.GeneratedAt,
+            ClientAgreedAt = DateTimeOffset.UtcNow
         };
 
         var payment = new Payment
         {
-            ClientId = clientId,
+            ClientId = facts.Client.Id,
             VendorId = vendor.Id,
-            Amount = agreedPrice.Value,
+            Amount = agreedPrice,
             Status = PaymentStatus.Authorized,
             PaymentMethod = dto.PaymentMethodId,
             GatewayReference = intentResult.PaymentIntentId,
@@ -192,7 +198,7 @@ public class BookingService : IBookingService
             slot.Status = AvailabilityStatus.Held;
             slot.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(_bookingOptions.HoldTtlHours);
             slot.BookingRequest = booking;
-            slotRepo.Update(slot);
+            _unitOfWork.Repository<VendorAvailability, long>().Update(slot);
 
             var history = new BookingStatusHistory
             {
@@ -219,6 +225,9 @@ public class BookingService : IBookingService
             await CompensateAuthorizationAsync(intentResult.PaymentIntentId, dto.RequestId);
             throw;
         }
+
+        // Booking committed with its agreed contract attached — the token has served its purpose.
+        _agreementPreviewStore.Remove(dto.AgreementToken);
 
         await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
             vendor.UserId,
@@ -332,8 +341,13 @@ public class BookingService : IBookingService
         return MapBooking(booking);
     }
 
-    public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId)
+    public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId, bool agreementAccepted)
     {
+        if (!agreementAccepted)
+        {
+            throw new BadRequestExeption("You must read and agree to the Booking Agreement before accepting.");
+        }
+
         var vendorId = await ResolveVendorIdAsync(vendorUserId);
 
         var repo = _unitOfWork.Repository<BookingRequest, long>();
@@ -387,6 +401,7 @@ public class BookingService : IBookingService
         booking.Status = BookingStatus.Accepted;
         booking.PaymentStatus = BookingPaymentStatus.Paid;
         booking.RespondedAt = DateTimeOffset.UtcNow;
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
         booking.UpdatedAt = DateTimeOffset.UtcNow;
 
         payment.Status = PaymentStatus.Completed;
@@ -437,13 +452,13 @@ public class BookingService : IBookingService
             throw;
         }
 
-        // Step 2-4 of the AI contract workflow: generate the Event Booking Contract, generate the
-        // vendor's one-time Partnership Agreement if it doesn't have one yet, persist both via the
-        // existing attachment storage, and notify client/vendor/admin. All best-effort: the payment
-        // has already been captured above, so a Gemini/PDF hiccup here must never fail this call or
-        // undo the accepted booking.
+        // Post-accept side effects: notify client/vendor about the (already-attached) Event Booking
+        // Contract, and generate the vendor's one-time Partnership Agreement if they don't have one yet.
+        // The booking contract itself was generated and agreed at the payment step, so nothing is drafted
+        // here for it. All best-effort: payment is already captured, so a Gemini/PDF/notify hiccup must
+        // never fail this call or undo the accepted booking.
         var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
-        await GenerateContractsAndNotifyAsync(booking, client, vendorUserId);
+        await ProcessAcceptedBookingAsync(booking, client, vendorUserId);
 
         return MapBooking(booking);
     }
@@ -765,6 +780,121 @@ public class BookingService : IBookingService
         return vendor.Id;
     }
 
+    /// <summary>The fully-resolved, validated parties and slot behind a booking — shared by the agreement
+    /// preview and the actual booking creation so both apply identical rules and see the same facts.</summary>
+    private sealed record BookingFacts(
+        Client Client,
+        Vendor Vendor,
+        ApplicationUser VendorUser,
+        EventPlan EventPlan,
+        VendorAvailability Slot,
+        decimal AgreedPrice);
+
+    /// <summary>
+    /// Resolves and validates every party/slot/package fact needed to draft the Booking Agreement and,
+    /// later, to create the booking: client ownership of the event plan, the slot being genuinely
+    /// available, the vendor verified and active, the package belonging to that vendor, guest count
+    /// within the package limit, and a positive agreed price (the package's, the server's source of
+    /// truth). Throws the same domain exceptions the create path always has.
+    /// </summary>
+    private async Task<BookingFacts> ResolveBookingFactsAsync(
+        long clientUserId, long eventPlanId, long availabilityId, long? vendorPackageId, int? guestCount)
+    {
+        var client = await _unitOfWork.Repository<Client, long>()
+            .GetWithSpecAsync(new ClientByUserIdSpecification(clientUserId));
+        if (client is null)
+        {
+            throw new NotFoundExeption(nameof(Client), clientUserId);
+        }
+
+        var eventPlan = await _unitOfWork.Repository<EventPlan, long>().GetAsync(eventPlanId);
+        if (eventPlan is null || eventPlan.ClientId != client.Id)
+        {
+            throw new NotFoundExeption(nameof(EventPlan), eventPlanId);
+        }
+
+        var slot = await _unitOfWork.Repository<VendorAvailability, long>()
+            .GetWithSpecAsync(new VendorAvailabilityByIdSpecification(availabilityId));
+        if (slot is null)
+        {
+            throw new NotFoundExeption(nameof(VendorAvailability), availabilityId);
+        }
+
+        if (slot.Status != AvailabilityStatus.Available)
+        {
+            if (slot.BookingRequest is not null && slot.BookingRequest.ClientId == client.Id)
+            {
+                throw new SlotUnavailableExeption("You already have a booking for this exact time slot.");
+            }
+
+            throw new SlotUnavailableExeption($"Slot {availabilityId} is no longer available for booking.");
+        }
+
+        var vendor = slot.Vendor;
+        if (!VerificationStatus.IsApproved(vendor.VerificationStatus))
+        {
+            throw new BadRequestExeption("This vendor is not verified and cannot accept bookings.");
+        }
+
+        var vendorUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(vendor.UserId);
+        if (vendorUser is null || !vendorUser.IsActive)
+        {
+            throw new BadRequestExeption("This vendor is not currently active.");
+        }
+
+        if (vendorPackageId is null)
+        {
+            throw new BadRequestExeption("A package must be selected so a price can be authorized for this booking.");
+        }
+
+        var package = await _unitOfWork.Repository<VendorPackage, long>().GetAsync(vendorPackageId.Value);
+        if (package is null || package.VendorId != vendor.Id)
+        {
+            throw new NotFoundExeption(nameof(VendorPackage), vendorPackageId.Value);
+        }
+
+        if (package.MaxGuests is not null && guestCount is not null && guestCount > package.MaxGuests)
+        {
+            throw new BadRequestExeption(
+                $"Guest count exceeds the package maximum of {package.MaxGuests} guests.");
+        }
+
+        if (package.BasePrice <= 0)
+        {
+            throw new BadRequestExeption("A package must be selected so a price can be authorized for this booking.");
+        }
+
+        return new BookingFacts(client, vendor, vendorUser, eventPlan, slot, package.BasePrice);
+    }
+
+    /// <summary>Builds the Event Booking Contract input from resolved facts plus the client's account
+    /// (loaded only for the preview, since booking creation doesn't need it). Shared so the agreement the
+    /// client previews is drafted from exactly the same fields the accepted contract would have been.</summary>
+    private GenerateContractDto BuildBookingContractDto(
+        BookingFacts facts, ApplicationUser clientUser, int? guestCount, string? clientMessage, DateOnly eventDate)
+    {
+        return new GenerateContractDto
+        {
+            ClientName = clientUser.FullName,
+            ClientEmail = clientUser.Email,
+            ClientPhone = clientUser.PhoneNumber,
+            ClientAddress = facts.Client.City,
+            ClientRepresentativeName = clientUser.FullName,
+            VendorName = facts.Vendor.BusinessName,
+            VendorEmail = facts.VendorUser.Email,
+            VendorPhone = facts.VendorUser.PhoneNumber,
+            VendorAddress = string.IsNullOrWhiteSpace(facts.Vendor.Address) ? facts.Vendor.City : facts.Vendor.Address,
+            VendorRepresentativeName = facts.VendorUser.FullName,
+            EventType = facts.EventPlan.EventType,
+            EventDate = eventDate,
+            EventLocation = facts.EventPlan.City,
+            GuestCount = guestCount ?? facts.EventPlan.GuestCount,
+            Price = facts.AgreedPrice,
+            Currency = _stripeOptions.DefaultCurrency,
+            AdditionalTerms = clientMessage
+        };
+    }
+
     /// <summary>
     /// Best-effort void of an authorized-but-not-yet-captured PaymentIntent when a booking request is
     /// rejected, cancelled, or expires. Unlike the capture path, a failure here is low-stakes: no money has
@@ -809,13 +939,13 @@ public class BookingService : IBookingService
     }
 
     /// <summary>
-    /// Orchestrates the AI contract workflow that follows a vendor accepting (confirming) a booking:
-    /// draft + store the Client/Vendor Event Booking Contract, draft + store the Vendor/Planura
-    /// Partnership Agreement exactly once per vendor, and notify client, vendor and admins. Every
-    /// step here is best-effort - the booking is already Accepted/Paid by the time this runs, so
-    /// nothing in here is allowed to throw back to the caller.
+    /// Side effects that follow a vendor accepting (confirming) a booking: notify the client and vendor
+    /// that the booking is confirmed (surfacing the Event Booking Contract that was generated and agreed
+    /// at the payment step and is already attached to the booking), and draft + store the Vendor/Planura
+    /// Partnership Agreement exactly once per vendor. Every step here is best-effort — the booking is
+    /// already Accepted/Paid by the time this runs, so nothing in here is allowed to throw to the caller.
     /// </summary>
-    private async Task GenerateContractsAndNotifyAsync(BookingRequest booking, Client? client, long vendorUserId)
+    private async Task ProcessAcceptedBookingAsync(BookingRequest booking, Client? client, long vendorUserId)
     {
         var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
         if (vendor is null)
@@ -824,22 +954,10 @@ public class BookingService : IBookingService
         }
 
         var vendorUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(vendor.UserId);
-        var eventPlan = await _unitOfWork.Repository<EventPlan, long>().GetAsync(booking.EventPlanId);
-        var clientUser = client is not null
-            ? await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(client.UserId)
-            : null;
 
-        string? contractUrl = null;
-        if (vendor is not null && vendorUser is not null && eventPlan is not null && client is not null && clientUser is not null)
-        {
-            contractUrl = await GenerateBookingContractBestEffortAsync(booking, vendor, eventPlan, client, clientUser, vendorUser);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "Skipping Event Booking Contract generation for booking request {BookingRequestId}: vendor, vendor user, client, client user, or event plan could not be loaded.",
-                booking.Id);
-        }
+        // The Event Booking Contract was drafted and agreed at the payment step and copied onto the
+        // booking at creation, so it's simply surfaced here — never regenerated on accept.
+        var contractUrl = _attachmentService.ToAbsoluteUrl(booking.ContractDocumentUrl);
 
         if (contractUrl is not null)
         {
@@ -915,59 +1033,6 @@ public class BookingService : IBookingService
                         agreementUrl
                     })));
             }
-        }
-    }
-
-    /// <summary>Drafts and stores the Event Booking Contract PDF. Returns the absolute download URL, or null on any failure.</summary>
-    private async Task<string?> GenerateBookingContractBestEffortAsync(
-        BookingRequest booking, Vendor vendor, EventPlan eventPlan, Client client, ApplicationUser clientUser, ApplicationUser vendorUser)
-    {
-        if (booking.AgreedPrice is null or <= 0)
-        {
-            _logger.LogWarning("Skipping contract generation for booking request {BookingRequestId}: no agreed price on record.", booking.Id);
-            return null;
-        }
-
-        try
-        {
-            var contractDto = new GenerateContractDto
-            {
-                ClientName = clientUser.FullName,
-                ClientEmail = clientUser.Email,
-                ClientPhone = clientUser.PhoneNumber,
-                ClientAddress = client.City,
-                ClientRepresentativeName = clientUser.FullName,
-                VendorName = vendor.BusinessName,
-                VendorEmail = vendorUser.Email,
-                VendorPhone = vendorUser.PhoneNumber,
-                VendorAddress = string.IsNullOrWhiteSpace(vendor.Address) ? vendor.City : vendor.Address,
-                VendorRepresentativeName = vendorUser.FullName,
-                EventType = eventPlan.EventType,
-                EventDate = booking.EventDate,
-                EventLocation = eventPlan.City,
-                GuestCount = booking.GuestCount ?? eventPlan.GuestCount,
-                Price = booking.AgreedPrice!.Value,
-                Currency = _stripeOptions.DefaultCurrency,
-                AdditionalTerms = booking.ClientMessage
-            };
-
-            var document = await _contractService.GenerateBookingContractAsync(contractDto);
-            var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(document.Content, document.FileName, BookingContractsFolder);
-
-            booking.ContractId = document.ContractId;
-            booking.ContractDocumentUrl = relativeUrl;
-            booking.ContractGeneratedAt = DateTimeOffset.UtcNow;
-            booking.UpdatedAt = DateTimeOffset.UtcNow;
-
-            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
-            await _unitOfWork.SaveChangesAsync();
-
-            return _attachmentService.ToAbsoluteUrl(relativeUrl);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to generate the Event Booking Contract for booking request {BookingRequestId}.", booking.Id);
-            return null;
         }
     }
 
