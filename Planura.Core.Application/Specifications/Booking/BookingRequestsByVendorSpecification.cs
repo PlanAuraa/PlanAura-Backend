@@ -17,6 +17,7 @@ public class BookingRequestsByVendorSpecification : BaseSpecification<BookingReq
         : base(BuildCriteria(vendorId, status, paymentStatus, excludeRefunded))
     {
         AddInclude(booking => booking.Client.User);
+        AddInclude(booking => booking.VendorAvailability);
         ApplyOrderByDescending(booking => booking.CreatedAt);
 
         if (skip is not null && take is not null)

@@ -59,4 +59,18 @@ public class EventPlansController : ControllerBase
         await _eventPlanService.DeleteEventPlanAsync(id, CurrentUserId);
         return NoContent();
     }
+
+    [HttpPost("{id:long}/checklist")]
+    public async Task<ActionResult<EventPlanChecklistItemDto>> AddChecklistItem(long id, [FromBody] AddChecklistItemDto dto)
+    {
+        var result = await _eventPlanService.AddChecklistItemAsync(id, CurrentUserId, dto);
+        return Ok(result);
+    }
+
+    [HttpDelete("{id:long}/checklist/{serviceCategoryId:long}")]
+    public async Task<ActionResult> RemoveChecklistItem(long id, long serviceCategoryId)
+    {
+        await _eventPlanService.RemoveChecklistItemAsync(id, CurrentUserId, serviceCategoryId);
+        return NoContent();
+    }
 }

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.AdminBooking;
 using Planura.Core.Application.Services;
 using Planura.Core.Application.Services.Booking;
 using Planura.Shared.Errors.Models;
@@ -58,10 +59,49 @@ public class BookingRequestsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>The permanent "Booking Activity" audit trail — the source of truth for what
+    /// happened to this booking, independent of any (best-effort) notification.</summary>
+    [HttpGet("{id:long}/timeline")]
+    public async Task<ActionResult<List<BookingStatusHistoryEntryDto>>> GetTimeline(long id)
+    {
+        var result = await _bookingService.GetBookingTimelineAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
     [HttpPatch("{id:long}/cancel")]
     public async Task<ActionResult<BookingRequestDto>> Cancel(long id)
     {
         var result = await _bookingService.CancelBookingRequestAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>Estimated refund if the client requested cancellation right now — shown before they commit.</summary>
+    [HttpGet("{id:long}/cancellation-quote")]
+    public async Task<ActionResult<CancellationQuoteDto>> GetCancellationQuote(long id)
+    {
+        var result = await _bookingService.GetCancellationQuoteAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Requests cancellation of an Accepted booking. Does not cancel it immediately — moves it to
+    /// CancellationRequested pending admin approval (see api/admin/bookings/cancellation-requests).
+    /// </summary>
+    [HttpPost("{id:long}/request-cancellation")]
+    public async Task<ActionResult<BookingRequestDto>> RequestCancellation(long id, [FromBody] RequestCancellationDto dto)
+    {
+        var result = await _bookingService.RequestCancellationAsync(id, CurrentUserId, dto.Reason);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// The client confirms the service was delivered for a booking sitting in
+    /// AwaitingConfirmation, completing it. "Report a problem" instead uses POST .../dispute.
+    /// </summary>
+    [HttpPost("{id:long}/confirm-completion")]
+    public async Task<ActionResult<BookingRequestDto>> ConfirmCompletion(long id)
+    {
+        var result = await _bookingService.ConfirmServiceDeliveredAsync(id, CurrentUserId);
         return Ok(result);
     }
 

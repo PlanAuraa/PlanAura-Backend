@@ -13,6 +13,10 @@ namespace Planura.Core.Application.Models.Vendor
 
         public decimal? MinRating { get; set; }
 
+        /// <summary>Only vendors with at least one Available slot starting on this UTC calendar date
+        /// (e.g. "a photographer available on August 12").</summary>
+        public DateOnly? AvailableOn { get; set; }
+
         /// <summary>"featured" (default), "rating", "priceAsc" or "priceDesc".</summary>
         public string? SortBy { get; set; }
 

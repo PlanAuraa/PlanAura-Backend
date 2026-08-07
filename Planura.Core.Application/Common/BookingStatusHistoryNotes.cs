@@ -9,4 +9,5 @@ namespace Planura.Core.Application.Common;
 public static class BookingStatusHistoryNotes
 {
     public const string DisputeRaisedPrefix = "Dispute raised: ";
+    public const string DisputeResolvedPrefix = "Dispute resolved: ";
 }

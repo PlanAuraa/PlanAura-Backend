@@ -10,6 +10,7 @@ public interface IVendorAvailabilityService
     Task<AvailabilityCheckResultDto> CheckAvailabilityAsync(AvailabilityCheckDto dto);
 
     Task<VendorAvailabilityDto> CreateAsync(long vendorId, CreateVendorAvailabilityDto dto);
+    Task<GenerateRecurringAvailabilityResultDto> GenerateRecurringAsync(long vendorId, CreateRecurringAvailabilityDto dto);
     Task<VendorAvailabilityDto> UpdateAsync(long id, long vendorId, UpdateVendorAvailabilityDto dto);
     Task DeleteAsync(long id, long vendorId);
 

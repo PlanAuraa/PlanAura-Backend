@@ -41,6 +41,24 @@ public class BookingRequest
     public long? ResolvedByAdminId { get; set; }
     public DateTimeOffset? ResolvedAt { get; set; }
 
+    // Set when the event's slot has ended and the booking moves to AwaitingConfirmation — the
+    // clock the auto-confirm grace window (BookingOptions.AutoConfirmAfterDays) counts from.
+    public DateTimeOffset? AwaitingConfirmationSince { get; set; }
+
+    // Client-requested cancellation of an Accepted booking, pending admin review (see
+    // BookingStatus.CancellationRequested). RefundPercent/Amount are the policy-computed estimate
+    // at request time; the admin can adjust the final amount on approval.
+    public string? CancellationReason { get; set; }
+    public DateTimeOffset? CancellationRequestedAt { get; set; }
+    public string? CancellationReviewNotes { get; set; }
+    // When the admin approved or rejected the request (Cancelled/Accepted resolves the same moment
+    // CancelledAt is set on approval, but rejection has no other timestamp of its own — this covers
+    // both cases uniformly for the client-facing booking timeline).
+    public DateTimeOffset? CancellationReviewedAt { get; set; }
+    public decimal? CancellationRefundPercent { get; set; }
+    public decimal? CancellationRefundAmount { get; set; }
+    public RefundStatus RefundStatus { get; set; } = RefundStatus.None;
+
     public EventPlan EventPlan { get; set; } = null!;
     public Client Client { get; set; } = null!;
     public Vendor Vendor { get; set; } = null!;

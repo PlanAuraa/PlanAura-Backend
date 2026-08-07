@@ -75,6 +75,8 @@ namespace Planura.Core.Application.Services.AdminPayment
                     BookingRequestId = p.BookingRequestId,
                     ClientId = p.ClientId,
                     ClientName = p.Client.User.FullName,
+                    ClientEmail = p.Client.User.Email,
+                    ClientPhone = p.Client.User.PhoneNumber,
                     VendorId = p.VendorId,
                     VendorName = p.Vendor.BusinessName,
                     Amount = p.Amount,

@@ -47,6 +47,27 @@ public class EventPlanItemConfiguration : IEntityTypeConfiguration<EventPlanItem
     }
 }
 
+public class EventPlanChecklistItemConfiguration : IEntityTypeConfiguration<EventPlanChecklistItem>
+{
+    public void Configure(EntityTypeBuilder<EventPlanChecklistItem> builder)
+    {
+        builder.Property(item => item.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        // A category can only be checked off once per plan.
+        builder.HasIndex(item => new { item.EventPlanId, item.ServiceCategoryId }).IsUnique();
+
+        builder.HasOne(item => item.EventPlan)
+            .WithMany(plan => plan.ChecklistItems)
+            .HasForeignKey(item => item.EventPlanId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(item => item.ServiceCategory)
+            .WithMany()
+            .HasForeignKey(item => item.ServiceCategoryId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public class AiEventVisualizationConfiguration : IEntityTypeConfiguration<AiEventVisualization>
 {
     public void Configure(EntityTypeBuilder<AiEventVisualization> builder)

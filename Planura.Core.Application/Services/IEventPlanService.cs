@@ -9,4 +9,6 @@ public interface IEventPlanService
     Task<EventPlanDto> GetEventPlanAsync(long eventPlanId, long clientUserId);
     Task<EventPlanDto> UpdateEventPlanAsync(long eventPlanId, long clientUserId, UpdateEventPlanDto dto);
     Task DeleteEventPlanAsync(long eventPlanId, long clientUserId);
+    Task<EventPlanChecklistItemDto> AddChecklistItemAsync(long eventPlanId, long clientUserId, AddChecklistItemDto dto);
+    Task RemoveChecklistItemAsync(long eventPlanId, long clientUserId, long serviceCategoryId);
 }

@@ -498,6 +498,38 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(12,2)")
                         .HasColumnName("agreed_price");
 
+                    b.Property<DateTimeOffset?>("AwaitingConfirmationSince")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("awaiting_confirmation_since");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("cancellation_reason");
+
+                    b.Property<decimal?>("CancellationRefundAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("decimal(12,2)")
+                        .HasColumnName("cancellation_refund_amount");
+
+                    b.Property<decimal?>("CancellationRefundPercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("decimal(5,2)")
+                        .HasColumnName("cancellation_refund_percent");
+
+                    b.Property<DateTimeOffset?>("CancellationRequestedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("cancellation_requested_at");
+
+                    b.Property<string>("CancellationReviewNotes")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("cancellation_review_notes");
+
+                    b.Property<DateTimeOffset?>("CancellationReviewedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("cancellation_reviewed_at");
+
                     b.Property<DateTimeOffset?>("CancelledAt")
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("cancelled_at");
@@ -575,6 +607,14 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasDefaultValue("Unpaid")
                         .HasColumnName("payment_status");
 
+                    b.Property<string>("RefundStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("None")
+                        .HasColumnName("refund_status");
+
                     b.Property<string>("ResolutionNotes")
                         .HasColumnType("nvarchar(max)")
                         .HasColumnName("resolution_notes");
@@ -594,8 +634,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
                         .HasDefaultValue("Pending")
                         .HasColumnName("status");
 
@@ -673,8 +713,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("NewStatus")
                         .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
                         .HasColumnName("new_status");
 
                     b.Property<string>("Notes")
@@ -682,8 +722,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasColumnName("notes");
 
                     b.Property<string>("PreviousStatus")
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
                         .HasColumnName("previous_status");
 
                     b.HasKey("Id")
@@ -820,6 +860,42 @@ namespace Planura.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_event_plans_client_id");
 
                     b.ToTable("event_plans");
+                });
+
+            modelBuilder.Entity("Planura.Core.Domain.Entities.EventPlanChecklistItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("GETUTCDATE()");
+
+                    b.Property<long>("EventPlanId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("event_plan_id");
+
+                    b.Property<long>("ServiceCategoryId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("service_category_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_event_plan_checklist_items");
+
+                    b.HasIndex("ServiceCategoryId")
+                        .HasDatabaseName("ix_event_plan_checklist_items_service_category_id");
+
+                    b.HasIndex("EventPlanId", "ServiceCategoryId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_event_plan_checklist_items_event_plan_id_service_category_id");
+
+                    b.ToTable("event_plan_checklist_items");
                 });
 
             modelBuilder.Entity("Planura.Core.Domain.Entities.EventPlanItem", b =>
@@ -1920,6 +1996,27 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.Navigation("Client");
                 });
 
+            modelBuilder.Entity("Planura.Core.Domain.Entities.EventPlanChecklistItem", b =>
+                {
+                    b.HasOne("Planura.Core.Domain.Entities.EventPlan", "EventPlan")
+                        .WithMany("ChecklistItems")
+                        .HasForeignKey("EventPlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_event_plan_checklist_items_event_plans_event_plan_id");
+
+                    b.HasOne("Planura.Core.Domain.Entities.ServiceCategory", "ServiceCategory")
+                        .WithMany()
+                        .HasForeignKey("ServiceCategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_event_plan_checklist_items_service_categories_service_category_id");
+
+                    b.Navigation("EventPlan");
+
+                    b.Navigation("ServiceCategory");
+                });
+
             modelBuilder.Entity("Planura.Core.Domain.Entities.EventPlanItem", b =>
                 {
                     b.HasOne("Planura.Core.Domain.Entities.EventPlan", "EventPlan")
@@ -2225,6 +2322,8 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.Navigation("AiInvitations");
 
                     b.Navigation("BookingRequests");
+
+                    b.Navigation("ChecklistItems");
 
                     b.Navigation("Items");
                 });

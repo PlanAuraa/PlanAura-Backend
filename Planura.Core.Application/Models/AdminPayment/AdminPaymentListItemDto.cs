@@ -10,6 +10,8 @@ namespace Planura.Core.Application.Models.AdminPayment
         public long BookingRequestId { get; set; }
         public long ClientId { get; set; }
         public string? ClientName { get; set; }
+        public string? ClientEmail { get; set; }
+        public string? ClientPhone { get; set; }
         public long VendorId { get; set; }
         public string? VendorName { get; set; }
         public decimal Amount { get; set; }

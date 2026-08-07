@@ -1,4 +1,5 @@
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.AdminBooking;
 
 namespace Planura.Core.Application.Services.Booking;
 
@@ -7,11 +8,16 @@ public interface IBookingService
     Task<AgreementPreviewResultDto> PreviewBookingAgreementAsync(long clientUserId, AgreementPreviewRequestDto dto);
     Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto);
     Task<BookingRequestDto> CancelBookingRequestAsync(long bookingRequestId, long clientUserId);
+    Task<BookingRequestDto> ConfirmServiceDeliveredAsync(long bookingRequestId, long clientUserId);
+    Task<CancellationQuoteDto> GetCancellationQuoteAsync(long bookingRequestId, long clientUserId);
+    Task<BookingRequestDto> RequestCancellationAsync(long bookingRequestId, long clientUserId, string reason);
     Task<BookingRequestDto> GetBookingRequestAsync(long bookingRequestId, long clientUserId);
+    Task<List<BookingStatusHistoryEntryDto>> GetBookingTimelineAsync(long bookingRequestId, long clientUserId);
     Task<PagedResult<BookingRequestDto>> ListMyBookingRequestsAsync(long clientUserId, BookingRequestFilterDto filter);
     Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason);
     Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId, bool agreementAccepted);
     Task<BookingRequestDto> RejectBookingRequestAsync(long bookingRequestId, long vendorUserId, string? reason);
     Task<PagedResult<BookingRequestDto>> ListVendorBookingRequestsAsync(long vendorUserId, BookingRequestFilterDto filter);
     Task<BookingRequestDto> GetVendorBookingRequestAsync(long bookingRequestId, long vendorUserId);
+    Task<List<BookingStatusHistoryEntryDto>> GetVendorBookingTimelineAsync(long bookingRequestId, long vendorUserId);
 }

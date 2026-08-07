@@ -84,6 +84,85 @@ public class VendorAvailabilityService : IVendorAvailabilityService
         return _mapper.Map<VendorAvailabilityDto>(slot);
     }
 
+    public async Task<GenerateRecurringAvailabilityResultDto> GenerateRecurringAsync(long vendorId, CreateRecurringAvailabilityDto dto)
+    {
+        await EnsureVendorExistsAsync(vendorId);
+
+        if (dto.DaysOfWeek is null || dto.DaysOfWeek.Length == 0)
+        {
+            throw new BadRequestExeption("At least one day of the week is required.");
+        }
+
+        if (dto.DaysOfWeek.Any(d => d is < 0 or > 6))
+        {
+            throw new BadRequestExeption("DaysOfWeek must contain values between 0 (Sunday) and 6 (Saturday).");
+        }
+
+        if (dto.EndTime <= dto.StartTime)
+        {
+            throw new BadRequestExeption("EndTime must be later than StartTime.");
+        }
+
+        if (dto.RepeatMonths is < 1 or > 12)
+        {
+            throw new BadRequestExeption("RepeatMonths must be between 1 and 12.");
+        }
+
+        var days = dto.DaysOfWeek.Select(d => (DayOfWeek)d).ToHashSet();
+        var endDate = dto.StartDate.AddMonths(dto.RepeatMonths);
+
+        // One query for every existing slot on this vendor, then overlap-checked in memory against
+        // each candidate — mirrors VendorBookedAvailabilityOverlapSpecification's criteria
+        // (existing.StartAt < candidate.EndAt && existing.EndAt > candidate.StartAt) without a
+        // per-candidate round trip, since a multi-month pattern can generate dozens of candidates.
+        var existingSlots = (await _unitOfWork.Repository<VendorAvailability, long>()
+            .GetAllWithSpecAsync(new VendorAvailabilityByVendorSpecification(vendorId))).ToList();
+
+        var newSlots = new List<VendorAvailability>();
+        var skippedCount = 0;
+
+        for (var date = dto.StartDate; date < endDate; date = date.AddDays(1))
+        {
+            if (!days.Contains(date.DayOfWeek))
+            {
+                continue;
+            }
+
+            var startAt = new DateTimeOffset(date.ToDateTime(dto.StartTime), TimeSpan.Zero);
+            var endAt = new DateTimeOffset(date.ToDateTime(dto.EndTime), TimeSpan.Zero);
+
+            var overlaps = existingSlots.Any(slot => slot.StartAt < endAt && slot.EndAt > startAt)
+                || newSlots.Any(slot => slot.StartAt < endAt && slot.EndAt > startAt);
+
+            if (overlaps)
+            {
+                skippedCount++;
+                continue;
+            }
+
+            newSlots.Add(new VendorAvailability
+            {
+                VendorId = vendorId,
+                StartAt = startAt,
+                EndAt = endAt,
+                Status = AvailabilityStatus.Available,
+                BookingRequestId = null
+            });
+        }
+
+        if (newSlots.Count > 0)
+        {
+            await _unitOfWork.Repository<VendorAvailability, long>().AddRangeAsync(newSlots);
+            await _unitOfWork.SaveChangesAsync();
+        }
+
+        return new GenerateRecurringAvailabilityResultDto
+        {
+            CreatedCount = newSlots.Count,
+            SkippedCount = skippedCount
+        };
+    }
+
     public async Task<VendorAvailabilityDto> UpdateAsync(long id, long vendorId, UpdateVendorAvailabilityDto dto)
     {
         var repo = _unitOfWork.Repository<VendorAvailability, long>();

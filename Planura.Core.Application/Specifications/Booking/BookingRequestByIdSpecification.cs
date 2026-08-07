@@ -8,5 +8,6 @@ public class BookingRequestByIdSpecification : BaseSpecification<BookingRequest>
     public BookingRequestByIdSpecification(long id) : base(booking => booking.Id == id)
     {
         AddInclude(booking => booking.Client.User);
+        AddInclude(booking => booking.VendorAvailability);
     }
 }

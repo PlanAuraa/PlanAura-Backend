@@ -34,6 +34,21 @@ public class BookingRequestDto
     public DateTimeOffset? ClientAgreedAt { get; set; }
     public DateTimeOffset? VendorAgreedAt { get; set; }
 
+    public DateTimeOffset? AwaitingConfirmationSince { get; set; }
+
+    public string? CancellationReason { get; set; }
+    public DateTimeOffset? CancellationRequestedAt { get; set; }
+    public string? CancellationReviewNotes { get; set; }
+    public DateTimeOffset? CancellationReviewedAt { get; set; }
+    public decimal? CancellationRefundPercent { get; set; }
+    public decimal? CancellationRefundAmount { get; set; }
+    public RefundStatus RefundStatus { get; set; }
+
+    /// <summary>The booked slot's exact start/end — lets every "date" display also show the time
+    /// (vendor list/details/accept-dialog, and the client's own booking views).</summary>
+    public DateTimeOffset? SlotStartAt { get; set; }
+    public DateTimeOffset? SlotEndAt { get; set; }
+
     public long? ReviewId { get; set; }
     public int? ReviewRating { get; set; }
     public string? ReviewComment { get; set; }
