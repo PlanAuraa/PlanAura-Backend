@@ -112,8 +112,13 @@ app.UseHttpsRedirection();
 
 app.UseStatusCodePagesWithReExecute("/Errors/{0}");
 
-app.UseStaticFiles();
+// CORS must run before UseStaticFiles - middleware order determines which
+// requests get Access-Control-* headers, and static file responses (the
+// generated AI images the frontend needs to fetch cross-origin as a blob
+// for downloads) short-circuit the pipeline before reaching any middleware
+// registered after UseStaticFiles.
 app.UseCors("PlanAuraPolicy");
+app.UseStaticFiles();
 
 
 app.UseAuthentication();
