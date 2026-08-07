@@ -61,6 +61,18 @@ public class VendorAvailabilityController : ControllerBase
     }
 
     [Authorize(Policy = AuthorizationPolicies.ApprovedVendor)]
+    [HttpPost("recurring")]
+    public async Task<ActionResult<GenerateRecurringAvailabilityResultDto>> GenerateRecurring(
+        [FromBody] CreateRecurringAvailabilityDto dto)
+    {
+        var vendorId = _currentUserService.VendorId
+            ?? throw new UnAuthorizedExeption("No vendor profile is associated with this account.");
+
+        var result = await _service.GenerateRecurringAsync(vendorId, dto);
+        return Ok(result);
+    }
+
+    [Authorize(Policy = AuthorizationPolicies.ApprovedVendor)]
     [HttpPut("{id:long}")]
     public async Task<ActionResult<VendorAvailabilityDto>> Update(long id, [FromBody] UpdateVendorAvailabilityDto dto)
     {

@@ -14,4 +14,16 @@ public class EventPlanDto
     public string Status { get; set; } = null!;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    /// <summary>Sum of AgreedPrice over this plan's active bookings (Pending/Accepted/
+    /// AwaitingConfirmation/Completed). Only populated by GetEventPlanAsync (the detail view) —
+    /// 0 on list results.</summary>
+    public decimal TotalBookedCost { get; set; }
+
+    /// <summary>BudgetTotal - TotalBookedCost, or null when no BudgetTotal is set. Only populated by
+    /// GetEventPlanAsync — null on list results.</summary>
+    public decimal? RemainingBudget { get; set; }
+
+    /// <summary>Only populated by GetEventPlanAsync — empty on list results.</summary>
+    public List<EventPlanChecklistItemDto> Checklist { get; set; } = [];
 }

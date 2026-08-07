@@ -17,6 +17,8 @@ namespace Planura.Core.Application.Specifications.AdminBooking
           &&
           (filter.DisputeStatus == null || b.DisputeStatus == filter.DisputeStatus)
           &&
+          (filter.RefundStatus == null || b.RefundStatus == filter.RefundStatus)
+          &&
           (filter.FromDate == null || b.EventDate >= filter.FromDate)
           &&
           (filter.ToDate == null || b.EventDate <= filter.ToDate)

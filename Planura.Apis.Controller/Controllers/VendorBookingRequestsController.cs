@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.AdminBooking;
 using Planura.Core.Application.Services;
 using Planura.Core.Application.Services.Booking;
 using Planura.Shared.Errors.Models;
@@ -36,6 +37,14 @@ public class VendorBookingRequestsController : ControllerBase
     public async Task<ActionResult<BookingRequestDto>> GetIncomingById(long id)
     {
         var result = await _bookingService.GetVendorBookingRequestAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>The permanent "Booking Activity" audit trail — same source of truth the client sees.</summary>
+    [HttpGet("incoming/{id:long}/timeline")]
+    public async Task<ActionResult<List<BookingStatusHistoryEntryDto>>> GetTimeline(long id)
+    {
+        var result = await _bookingService.GetVendorBookingTimelineAsync(id, CurrentUserId);
         return Ok(result);
     }
 

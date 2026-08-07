@@ -22,6 +22,7 @@ public class EventPlan
 
     public Client Client { get; set; } = null!;
     public ICollection<EventPlanItem> Items { get; set; } = new List<EventPlanItem>();
+    public ICollection<EventPlanChecklistItem> ChecklistItems { get; set; } = new List<EventPlanChecklistItem>();
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<AiEventVisualization> AiEventVisualizations { get; set; } = new List<AiEventVisualization>();
     public ICollection<AiInvitation> AiInvitations { get; set; } = new List<AiInvitation>();

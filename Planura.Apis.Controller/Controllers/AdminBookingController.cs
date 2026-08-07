@@ -57,6 +57,38 @@ namespace Planura.Apis.Controller.Controllers
             return Ok(result);
         }
 
+        [HttpGet("{bookingId:long}/payment-detail")]
+        public async Task<ActionResult<AdminBookingPaymentDetailDto>> GetPaymentDetail(long bookingId)
+        {
+            var result = await _adminBookingService.GetBookingPaymentDetailAsync(bookingId);
+            return Ok(result);
+        }
+
+        [HttpGet("cancellation-requests")]
+        public async Task<ActionResult<IEnumerable<CancellationRequestListItemDto>>> GetCancellationRequests()
+        {
+            var result = await _adminBookingService.GetCancellationRequestsAsync();
+            return Ok(result);
+        }
+
+        [HttpPost("{bookingId:long}/approve-cancellation")]
+        public async Task<ActionResult<AdminBookingDto>> ApproveCancellation(
+            long bookingId, [FromBody] ApproveCancellationDto dto)
+        {
+            var adminId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var result = await _adminBookingService.ApproveCancellationAsync(bookingId, adminId, dto);
+            return Ok(result);
+        }
+
+        [HttpPost("{bookingId:long}/reject-cancellation")]
+        public async Task<ActionResult<AdminBookingDto>> RejectCancellation(
+            long bookingId, [FromBody] RejectCancellationDto dto)
+        {
+            var adminId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var result = await _adminBookingService.RejectCancellationAsync(bookingId, adminId, dto);
+            return Ok(result);
+        }
+
     }
 
 

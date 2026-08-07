@@ -6,6 +6,7 @@ using Planura.Core.Application.Abstraction.BookingAgreement;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
 using Planura.Core.Application.Models;
+using Planura.Core.Application.Models.AdminBooking;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.Contract;
 using Planura.Core.Application.Specifications;
@@ -341,6 +342,221 @@ public class BookingService : IBookingService
         return MapBooking(booking);
     }
 
+    /// <summary>
+    /// The client confirms the service was actually delivered — the only client-driven way an
+    /// AwaitingConfirmation booking reaches Completed (the other is BookingAutoCompleteJob's
+    /// auto-confirm pass, once the grace window elapses with no open dispute). "Report a problem"
+    /// instead uses the existing FlagDisputeAsync, which now accepts AwaitingConfirmation too.
+    /// </summary>
+    public async Task<BookingRequestDto> ConfirmServiceDeliveredAsync(long bookingRequestId, long clientUserId)
+    {
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.Status != BookingStatus.AwaitingConfirmation)
+        {
+            throw new BadRequestExeption(
+                $"Cannot confirm a booking request with status '{booking.Status}'. Only bookings awaiting confirmation can be confirmed.");
+        }
+
+        if (booking.DisputeStatus == DisputeStatus.Open)
+        {
+            throw new BadRequestExeption(
+                "This booking has an open dispute — it will be resolved by an admin instead of a direct confirmation.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        booking.Status = BookingStatus.Completed;
+        booking.CompletedAt = now;
+        booking.UpdatedAt = now;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+
+            // Mirrors BookingAutoCompleteJob's auto-confirm pass: same one-time, exact-once
+            // increment, just triggered by the client instead of the grace-window timer.
+            var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+            if (vendor is not null)
+            {
+                vendor.TotalCompletedBookings += 1;
+                vendor.UpdatedAt = now;
+                _unitOfWork.Repository<Vendor, long>().Update(vendor);
+            }
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = bookingRequestId,
+                PreviousStatus = BookingStatus.AwaitingConfirmation.ToString(),
+                NewStatus = BookingStatus.Completed.ToString(),
+                ChangedByUserId = clientUserId,
+                Notes = "Confirmed by client: service delivered."
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        var confirmedVendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (confirmedVendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                confirmedVendor.UserId,
+                NotificationTypes.BookingCompleted,
+                "Booking completed",
+                $"The client confirmed your booking for {booking.EventDate:d} is complete."));
+        }
+
+        return await MapBookingWithSlotAsync(booking);
+    }
+
+    /// <summary>Previews the refund the client would receive if they requested cancellation right
+    /// now, without changing anything — lets the UI show the estimate before they commit.</summary>
+    public async Task<CancellationQuoteDto> GetCancellationQuoteAsync(long bookingRequestId, long clientUserId)
+    {
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.Status != BookingStatus.Accepted)
+        {
+            throw new BadRequestExeption(
+                $"Cannot quote a cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
+        }
+
+        var (percent, amount, daysUntilEvent) = ResolveCancellationRefund(booking);
+        return new CancellationQuoteDto
+        {
+            DaysUntilEvent = daysUntilEvent,
+            RefundPercent = percent,
+            RefundAmount = amount
+        };
+    }
+
+    /// <summary>
+    /// The client requests cancellation of an Accepted booking. This does NOT cancel the booking,
+    /// release the vendor's slot, or create a refund — it moves the booking to
+    /// CancellationRequested and computes a refund estimate (locked in now, so admin-review delay
+    /// doesn't cost the client), then waits for an admin to approve or reject
+    /// (AdminBookingService.ApproveCancellationAsync / RejectCancellationAsync). Post-service issues
+    /// go through FlagDisputeAsync instead, not this.
+    /// </summary>
+    public async Task<BookingRequestDto> RequestCancellationAsync(long bookingRequestId, long clientUserId, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new BadRequestExeption("A cancellation reason is required.");
+        }
+
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.Status != BookingStatus.Accepted)
+        {
+            throw new BadRequestExeption(
+                $"Cannot request cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
+        }
+
+        var (percent, amount, _) = ResolveCancellationRefund(booking);
+
+        var now = DateTimeOffset.UtcNow;
+        booking.Status = BookingStatus.CancellationRequested;
+        booking.CancellationReason = reason;
+        booking.CancellationRequestedAt = now;
+        booking.CancellationRefundPercent = percent;
+        booking.CancellationRefundAmount = amount;
+        booking.RefundStatus = RefundStatus.PendingReview;
+        booking.UpdatedAt = now;
+
+        // The vendor's slot deliberately stays Booked and no refund is created here — both wait for
+        // the admin's decision (see ApproveCancellationAsync/RejectCancellationAsync).
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = bookingRequestId,
+                PreviousStatus = BookingStatus.Accepted.ToString(),
+                NewStatus = BookingStatus.CancellationRequested.ToString(),
+                ChangedByUserId = clientUserId,
+                Notes = $"Cancellation requested by client (estimated refund {percent:0.##}% = {amount:0.00}): {reason}"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        await NotifyBestEffortAsync(() => _notificationService.NotifyRoleAsync(
+            Roles.Admin,
+            NotificationTypes.BookingCancellationRequested,
+            "A booking cancellation needs review",
+            $"A client requested cancellation of the booking for {booking.EventDate:d} " +
+            $"(estimated refund {percent:0.##}%). Please review.",
+            BuildDataJson(new { bookingId = booking.Id })));
+
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.BookingCancellationRequested,
+                "Client requested a cancellation",
+                $"The client requested to cancel the booking for {booking.EventDate:d}. " +
+                "Your slot stays reserved until an admin reviews the request."));
+        }
+
+        return await MapBookingWithSlotAsync(booking);
+    }
+
+    /// <summary>Days-remaining-before-event refund tiers (BookingOptions.CancellationTiers): the tier
+    /// with the highest MinDaysBefore that daysUntilEvent still satisfies applies. Tiers are sorted
+    /// descending here regardless of config order, so a misordered appsettings list can't pick the
+    /// wrong (too-generous) tier.</summary>
+    private (decimal Percent, decimal Amount, int DaysUntilEvent) ResolveCancellationRefund(BookingRequest booking)
+    {
+        var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        var daysUntilEvent = booking.EventDate.DayNumber - today.DayNumber;
+
+        var tier = _bookingOptions.CancellationTiers
+            .OrderByDescending(t => t.MinDaysBefore)
+            .FirstOrDefault(t => daysUntilEvent >= t.MinDaysBefore);
+
+        var percent = tier?.RefundPercent ?? 0m;
+        var capturedAmount = booking.AgreedPrice ?? 0m;
+        var amount = Math.Round(capturedAmount * (percent / 100m), 2, MidpointRounding.AwayFromZero);
+
+        return (percent, amount, daysUntilEvent);
+    }
+
     public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId, bool agreementAccepted)
     {
         if (!agreementAccepted)
@@ -621,6 +837,25 @@ public class BookingService : IBookingService
         return MapBooking(booking);
     }
 
+    /// <summary>
+    /// The persistent, permanent record of everything that has happened to a booking — created,
+    /// accepted, cancellation requested/approved/rejected, disputed/resolved, completed, etc. This is
+    /// the source of truth the client-facing "Booking Activity" panel reads, so an outcome is never
+    /// visible only through a transient notification.
+    /// </summary>
+    public async Task<List<BookingStatusHistoryEntryDto>> GetBookingTimelineAsync(long bookingRequestId, long clientUserId)
+    {
+        var clientId = await ResolveClientIdAsync(clientUserId);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != clientId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        return await LoadTimelineAsync(bookingRequestId);
+    }
+
     public async Task<PagedResult<BookingRequestDto>> ListMyBookingRequestsAsync(long clientUserId, BookingRequestFilterDto filter)
     {
         var clientId = await ResolveClientIdAsync(clientUserId);
@@ -687,6 +922,37 @@ public class BookingService : IBookingService
         return MapBooking(booking);
     }
 
+    /// <summary>Vendor-side counterpart of GetBookingTimelineAsync — same permanent audit trail, scoped
+    /// to bookings this vendor owns.</summary>
+    public async Task<List<BookingStatusHistoryEntryDto>> GetVendorBookingTimelineAsync(long bookingRequestId, long vendorUserId)
+    {
+        var vendorId = await ResolveVendorIdAsync(vendorUserId);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.VendorId != vendorId)
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        return await LoadTimelineAsync(bookingRequestId);
+    }
+
+    private async Task<List<BookingStatusHistoryEntryDto>> LoadTimelineAsync(long bookingRequestId)
+    {
+        var history = await _unitOfWork.Repository<BookingStatusHistory, long>()
+            .GetAllWithSpecAsync(new BookingStatusHistoryByBookingRequestSpecification(bookingRequestId));
+
+        return history.Select(h => new BookingStatusHistoryEntryDto
+        {
+            PreviousStatus = h.PreviousStatus,
+            NewStatus = h.NewStatus,
+            ChangedByUserId = h.ChangedByUserId,
+            ChangedByName = h.ChangedByUser?.FullName,
+            Notes = h.Notes,
+            ChangedAt = h.ChangedAt
+        }).ToList();
+    }
+
     public async Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason)
     {
         if (string.IsNullOrWhiteSpace(reason))
@@ -701,7 +967,7 @@ public class BookingService : IBookingService
             throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
         }
 
-        if (booking.Status is not (BookingStatus.Accepted or BookingStatus.Completed))
+        if (booking.Status is not (BookingStatus.Accepted or BookingStatus.AwaitingConfirmation or BookingStatus.Completed))
         {
             throw new BadRequestExeption(
                 $"Cannot raise a dispute on a booking request with status '{booking.Status}'.");
@@ -830,6 +1096,9 @@ public class BookingService : IBookingService
             throw new SlotUnavailableExeption($"Slot {availabilityId} is no longer available for booking.");
         }
 
+        // Date-plan/slot mismatches are surfaced client-side as a non-blocking warning, not enforced
+        // here — the client may deliberately book a vendor for a different day than the plan's
+        // nominal date (e.g. a rehearsal, a multi-day event), so the final call stays theirs.
         var vendor = slot.Vendor;
         if (!VerificationStatus.IsApproved(vendor.VerificationStatus))
         {
@@ -930,6 +1199,41 @@ public class BookingService : IBookingService
         var dto = _mapper.Map<BookingRequestDto>(booking);
         dto.ContractDocumentUrl = _attachmentService.ToAbsoluteUrl(dto.ContractDocumentUrl);
         dto.ClientName = booking.Client?.User?.FullName;
+
+        // Relies on the linked VendorAvailability being loaded — either via an explicit Include on the
+        // spec that fetched `booking` (BookingRequestByIdSpecification / By-Client / By-Vendor), or
+        // EF's change-tracker fixup after this same DbContext instance already loaded/touched that
+        // slot earlier in the same request (Accept/Reject/Cancel all load the hold before mapping).
+        var slot = booking.VendorAvailability?.FirstOrDefault();
+        if (slot is not null)
+        {
+            dto.SlotStartAt = slot.StartAt;
+            dto.SlotEndAt = slot.EndAt;
+        }
+
+        return dto;
+    }
+
+    /// <summary>
+    /// For mutation methods that don't otherwise load the linked slot into the change tracker before
+    /// mapping (ConfirmServiceDeliveredAsync, RequestCancellationAsync) — an explicit fetch instead of
+    /// relying on fixup, so SlotStartAt/SlotEndAt are never silently missing on the returned DTO.
+    /// </summary>
+    private async Task<BookingRequestDto> MapBookingWithSlotAsync(BookingRequest booking)
+    {
+        var dto = MapBooking(booking);
+        if (dto.SlotStartAt is null)
+        {
+            var slots = await _unitOfWork.Repository<VendorAvailability, long>()
+                .GetAllWithSpecAsync(new VendorAvailabilityByBookingRequestSpecification(booking.Id));
+            var slot = slots.FirstOrDefault();
+            if (slot is not null)
+            {
+                dto.SlotStartAt = slot.StartAt;
+                dto.SlotEndAt = slot.EndAt;
+            }
+        }
+
         return dto;
     }
 

@@ -17,6 +17,8 @@ namespace Planura.Core.Application.Models.AdminBooking
 
         public DisputeStatus? DisputeStatus {  get; set; }
 
+        public RefundStatus? RefundStatus { get; set; }
+
         public DateOnly? FromDate {  get; set; }
 
         public DateOnly? ToDate {  get; set; }

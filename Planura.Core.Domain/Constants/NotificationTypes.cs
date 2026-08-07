@@ -23,4 +23,10 @@ public static class NotificationTypes
     public const string ContractGenerated = "contract_generated";
     public const string PartnershipAgreementGenerated = "partnership_agreement_generated";
     public const string PartnershipAgreementPendingReview = "partnership_agreement_pending_review";
+
+    public const string DisputeResolved = "dispute_resolved";
+    public const string BookingAwaitingConfirmation = "booking_awaiting_confirmation";
+    public const string BookingCancellationRequested = "booking_cancellation_requested";
+    public const string BookingCancellationApproved = "booking_cancellation_approved";
+    public const string BookingCancellationRejected = "booking_cancellation_rejected";
 }

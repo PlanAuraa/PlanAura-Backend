@@ -121,6 +121,16 @@ public class VendorService : IVendorService
             queryable = queryable.Where(vendor => vendor.AvgRating >= filter.MinRating.Value);
         }
 
+        if (filter.AvailableOn is not null)
+        {
+            var dayStart = new DateTimeOffset(filter.AvailableOn.Value.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+            var dayEnd = dayStart.AddDays(1);
+            queryable = queryable.Where(vendor => vendor.Availability.Any(slot =>
+                slot.Status == AvailabilityStatus.Available &&
+                slot.StartAt >= dayStart &&
+                slot.StartAt < dayEnd));
+        }
+
         var projected = queryable.Select(vendor => new VendorBrowseRow
         {
             Id = vendor.Id,

@@ -12,7 +12,7 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
         builder.Property(booking => booking.AgreedPrice).HasPrecision(12, 2);
         builder.Property(booking => booking.Status)
             .HasConversion<string>()
-            .HasMaxLength(20)
+            .HasMaxLength(30) // longest current value, "CancellationRequested", is 21 chars
             .HasDefaultValue(BookingStatus.Pending)
             .IsRequired();
         builder.Property(booking => booking.PaymentStatus)
@@ -27,6 +27,16 @@ public class BookingRequestConfiguration : IEntityTypeConfiguration<BookingReque
         builder.Property(booking => booking.ContractDocumentUrl).HasMaxLength(500);
         builder.Property(booking => booking.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(booking => booking.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        builder.Property(booking => booking.CancellationReason).HasMaxLength(500);
+        builder.Property(booking => booking.CancellationReviewNotes).HasMaxLength(500);
+        builder.Property(booking => booking.CancellationRefundPercent).HasPrecision(5, 2);
+        builder.Property(booking => booking.CancellationRefundAmount).HasPrecision(12, 2);
+        builder.Property(booking => booking.RefundStatus)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .HasDefaultValue(RefundStatus.None)
+            .IsRequired();
 
         builder.HasIndex(booking => booking.VendorId);
         builder.HasIndex(booking => booking.ClientId);
@@ -71,8 +81,8 @@ public class BookingStatusHistoryConfiguration : IEntityTypeConfiguration<Bookin
 {
     public void Configure(EntityTypeBuilder<BookingStatusHistory> builder)
     {
-        builder.Property(history => history.PreviousStatus).HasMaxLength(20);
-        builder.Property(history => history.NewStatus).HasMaxLength(20).IsRequired();
+        builder.Property(history => history.PreviousStatus).HasMaxLength(30);
+        builder.Property(history => history.NewStatus).HasMaxLength(30).IsRequired();
         builder.Property(history => history.ChangedAt).HasDefaultValueSql("GETUTCDATE()");
 
         builder.HasOne(history => history.BookingRequest)

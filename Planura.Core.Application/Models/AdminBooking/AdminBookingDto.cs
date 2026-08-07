@@ -17,5 +17,8 @@ namespace Planura.Core.Application.Models.AdminBooking
         public string VendorName { get; set; } = null;
         public string? PackageName {  get; set; }
 
+        public RefundStatus RefundStatus { get; set; }
+        public decimal? CancellationRefundAmount { get; set; }
+        public DateTimeOffset? CancellationRequestedAt { get; set; }
     }
 }
