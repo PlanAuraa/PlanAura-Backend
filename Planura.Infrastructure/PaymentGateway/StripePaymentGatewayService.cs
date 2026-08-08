@@ -16,6 +16,31 @@ namespace Planura.Infrastructure.PaymentGateway
             StripeConfiguration.ApiKey = _options.SecretKey;
         }
 
+        public async Task<string> CreateCustomerAsync(CreateCustomerRequest request)
+        {
+            var createOptions = new CustomerCreateOptions
+            {
+                Email = request.Email,
+                Name = request.Name,
+                Metadata = new Dictionary<string, string>(request.Metadata)
+            };
+
+            var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
+
+            var service = new CustomerService();
+            Customer customer;
+            try
+            {
+                customer = await service.CreateAsync(createOptions, requestOptions);
+            }
+            catch (StripeException ex)
+            {
+                throw new PaymentDeclinedExeption(ex.StripeError?.Message ?? ex.Message);
+            }
+
+            return customer.Id;
+        }
+
         public async Task<PaymentIntentResult> AuthorizePaymentIntentAsync(AuthorizePaymentIntentRequest request)
         {
             var createOptions = new PaymentIntentCreateOptions
@@ -32,6 +57,18 @@ namespace Planura.Infrastructure.PaymentGateway
                 },
                 Metadata = new Dictionary<string, string>(request.Metadata)
             };
+
+            // Deposit path: attach to the client's Customer and save the card for off-session future use so
+            // the remainder can be charged later without the client present. Stripe attaches the PaymentMethod
+            // to the Customer when this PaymentIntent is confirmed.
+            if (!string.IsNullOrWhiteSpace(request.CustomerId))
+            {
+                createOptions.Customer = request.CustomerId;
+            }
+            if (request.SaveCardForOffSession)
+            {
+                createOptions.SetupFutureUsage = "off_session";
+            }
 
             var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
 
@@ -68,6 +105,47 @@ namespace Planura.Infrastructure.PaymentGateway
 
             var service = new PaymentIntentService();
             var intent = await service.CaptureAsync(request.PaymentIntentId, new PaymentIntentCaptureOptions(), requestOptions);
+
+            return new PaymentIntentResult
+            {
+                PaymentIntentId = intent.Id,
+                ClientSecret = intent.ClientSecret,
+                Status = intent.Status
+            };
+        }
+
+        public async Task<PaymentIntentResult> ChargeOffSessionAsync(ChargeOffSessionRequest request)
+        {
+            var createOptions = new PaymentIntentCreateOptions
+            {
+                Amount = request.AmountInSmallestUnit,
+                Currency = request.Currency,
+                Customer = request.CustomerId,
+                PaymentMethod = request.PaymentMethodId,
+                Confirm = true,
+                OffSession = true,
+                Metadata = new Dictionary<string, string>(request.Metadata)
+            };
+
+            var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
+
+            var service = new PaymentIntentService();
+            PaymentIntent intent;
+            try
+            {
+                intent = await service.CreateAsync(createOptions, requestOptions);
+            }
+            catch (StripeException ex)
+            {
+                // Any off-session failure (insufficient funds, card declined, authentication_required/SCA)
+                // surfaces here and is treated identically by the caller — no SCA-specific branch (Phase 2).
+                throw new PaymentDeclinedExeption(ex.StripeError?.Message ?? ex.Message);
+            }
+
+            if (intent.Status != "succeeded")
+            {
+                throw new PaymentDeclinedExeption(intent.LastPaymentError?.Message ?? "The off-session charge did not succeed.");
+            }
 
             return new PaymentIntentResult
             {

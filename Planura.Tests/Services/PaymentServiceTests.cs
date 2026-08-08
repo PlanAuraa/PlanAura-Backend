@@ -186,6 +186,67 @@ public class PaymentServiceTests
     }
 
     [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentSucceeded_DepositRestingState_DoesNotClobberToFullyPaid()
+    {
+        // A deposit booking rests at DepositPaid_RemainderDue after accept. The payment_intent.succeeded
+        // webhook (fired when the deposit was captured) must NOT push it to Completed/Paid — that would
+        // falsely mark the booking fully paid while the remainder is still outstanding.
+        var payment = CreatePayment(status: PaymentStatus.DepositPaid_RemainderDue);
+        payment.IsDeposit = true;
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.succeeded", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        // Resting state is preserved and no fully-paid side effects fire.
+        Assert.Equal(PaymentStatus.DepositPaid_RemainderDue, payment.Status);
+        paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task HandleStripeWebhookAsync_PaymentSucceeded_DepositReconciliation_MarksRemainderDueNotFullyPaid()
+    {
+        // Deposit-path counterpart of the reconciliation path: the deposit capture succeeded in Stripe but
+        // AcceptBookingRequestAsync's DB write rolled back, so the payment is still DepositAuthorized. The
+        // webhook backstop must reconcile it to the deposit resting state — NOT to fully paid.
+        var payment = CreatePayment(status: PaymentStatus.DepositAuthorized);
+        payment.IsDeposit = true;
+        payment.Amount = 1000m;
+        payment.DepositAmount = 1000m;
+        payment.TotalAmount = 5000m;
+        _paymentGatewayServiceMock
+            .Setup(g => g.ConstructWebhookEvent("json", "sig"))
+            .Returns(new PaymentGatewayEvent { Type = "payment_intent.succeeded", PaymentIntentId = "pi_123" });
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(BookingRequestId)).ReturnsAsync(booking);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(new Vendor { Id = VendorId, UserId = VendorUserId, BusinessName = "V" });
+
+        var service = CreateService();
+        await service.HandleStripeWebhookAsync("json", "sig");
+
+        Assert.Equal(PaymentStatus.DepositPaid_RemainderDue, payment.Status);
+        Assert.NotNull(payment.PaidAt);
+        Assert.Equal(BookingPaymentStatus.DepositPaid, booking.PaymentStatus);
+    }
+
+    [Fact]
     public async Task HandleStripeWebhookAsync_PaymentFailed_MarksPaymentFailed()
     {
         var payment = CreatePayment();

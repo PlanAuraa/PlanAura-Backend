@@ -18,6 +18,14 @@ public class Payment
     public decimal? DepositAmount { get; set; }
     public decimal? TotalAmount { get; set; }
 
+    // Deposit / partial-payment (Phase 2). The card saved off-session for this deposit booking and the
+    // bookkeeping for the later remainder charge. All null on the full-payment path (nothing to charge).
+    // RemainderGatewayReference doubles as the idempotency/audit backstop against a double-charge.
+    public string? SavedPaymentMethodId { get; set; }
+    public string? RemainderGatewayReference { get; set; }
+    public DateTimeOffset? RemainderChargedAt { get; set; }
+    public string? RemainderFailureReason { get; set; }
+
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
     public string? PaymentMethod { get; set; }
     public string? GatewayReference { get; set; }

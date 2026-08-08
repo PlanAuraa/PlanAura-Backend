@@ -17,6 +17,9 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
             .IsRequired();
         builder.Property(payment => payment.PaymentMethod).HasMaxLength(30);
         builder.Property(payment => payment.GatewayReference).HasMaxLength(100);
+        builder.Property(payment => payment.SavedPaymentMethodId).HasMaxLength(100);
+        builder.Property(payment => payment.RemainderGatewayReference).HasMaxLength(100);
+        builder.Property(payment => payment.RemainderFailureReason).HasMaxLength(500);
         builder.Property(payment => payment.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
 
         builder.HasIndex(payment => payment.BookingRequestId);

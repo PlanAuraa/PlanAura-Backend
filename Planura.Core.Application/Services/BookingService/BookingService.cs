@@ -145,6 +145,26 @@ public class BookingService : IBookingService
         var eventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime);
         var plan = ResolvePaymentPlan(agreedPrice, eventDate);
 
+        // Deposit path (Phase 2): ensure the client has a Stripe Customer so the card can be saved and
+        // charged off-session for the remainder later. Created lazily on the first deposit booking and
+        // reused thereafter. A newly created id is persisted onto the client inside the transaction below,
+        // so a customer created here but then abandoned (declined auth / rolled-back write) is at worst a
+        // harmless unused Stripe Customer. The full-payment path never needs this.
+        string? customerId = plan.IsDeposit ? facts.Client.StripeCustomerId : null;
+        var createdNewCustomer = false;
+        if (plan.IsDeposit && string.IsNullOrWhiteSpace(customerId))
+        {
+            var clientUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(facts.Client.UserId);
+            customerId = await _paymentGatewayService.CreateCustomerAsync(new CreateCustomerRequest
+            {
+                Email = clientUser?.Email,
+                Name = clientUser?.FullName,
+                IdempotencyKey = $"customer-client-{facts.Client.Id}",
+                Metadata = new Dictionary<string, string> { ["client_id"] = facts.Client.Id.ToString() }
+            });
+            createdNewCustomer = true;
+        }
+
         // Authorize the card hold before touching the database: if this fails (declined, insufficient
         // funds, etc.) no booking request or payment row is ever created — see the option (b) status
         // model discussion. The only failure window left is between this call succeeding and the
@@ -155,6 +175,9 @@ public class BookingService : IBookingService
             Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
             PaymentMethodId = dto.PaymentMethodId,
             IdempotencyKey = dto.RequestId,
+            // Deposit path attaches to the Customer and saves the card off-session; full path does neither.
+            CustomerId = customerId,
+            SaveCardForOffSession = plan.IsDeposit,
             Metadata = new Dictionary<string, string>
             {
                 ["client_id"] = facts.Client.Id.ToString(),
@@ -200,6 +223,8 @@ public class BookingService : IBookingService
             TotalAmount = plan.TotalAmount,
             Status = plan.IsDeposit ? PaymentStatus.DepositAuthorized : PaymentStatus.Authorized,
             PaymentMethod = dto.PaymentMethodId,
+            // Deposit path saves the card for the later off-session remainder charge; full path leaves this null.
+            SavedPaymentMethodId = plan.IsDeposit ? dto.PaymentMethodId : null,
             GatewayReference = intentResult.PaymentIntentId,
             AuthorizedAt = DateTimeOffset.UtcNow,
             BookingRequest = booking
@@ -210,6 +235,15 @@ public class BookingService : IBookingService
         {
             await _unitOfWork.Repository<BookingRequest, long>().AddAsync(booking);
             await _unitOfWork.Repository<Payment, long>().AddAsync(payment);
+
+            // Persist a newly created Stripe Customer id onto the client so it's reused on future deposit
+            // bookings (and available to the remainder-charge job). Only when we created one this call.
+            if (createdNewCustomer)
+            {
+                facts.Client.StripeCustomerId = customerId;
+                facts.Client.UpdatedAt = DateTimeOffset.UtcNow;
+                _unitOfWork.Repository<Client, long>().Update(facts.Client);
+            }
 
             slot.Status = AvailabilityStatus.Held;
             slot.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(_bookingOptions.HoldTtlHours);
