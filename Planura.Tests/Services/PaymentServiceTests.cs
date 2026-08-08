@@ -130,9 +130,9 @@ public class PaymentServiceTests
         Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
 
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, "payment_successful", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, "payment_successful", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            VendorUserId, "payment_received", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            VendorUserId, "payment_received", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class PaymentServiceTests
 
         paymentRepo.Verify(r => r.Update(It.IsAny<Payment>()), Times.Never);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class PaymentServiceTests
 
         Assert.Equal(PaymentStatus.Failed, payment.Status);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, "payment_failed", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, "payment_failed", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]

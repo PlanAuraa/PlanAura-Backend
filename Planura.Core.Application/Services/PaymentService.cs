@@ -121,20 +121,24 @@ public class PaymentService : IPaymentService
 
     private async Task HandlePaymentSucceededAsync(Payment payment)
     {
-        if (payment.Status == PaymentStatus.Completed)
+        // Both are already-captured, already-recorded resting states (full path and deposit path
+        // respectively): the vendor-accept flow handled them synchronously — the common case. Re-processing
+        // here would just re-send notifications or, worse, mark a deposit booking fully Paid, so no-op.
+        if (payment.Status is PaymentStatus.Completed or PaymentStatus.DepositPaid_RemainderDue)
         {
-            // The vendor-accept flow already captured and recorded this synchronously — the common case.
-            // Re-processing here would just re-send "payment successful" notifications, so no-op.
             return;
         }
 
-        // Only reachable when the payment was still Authorized: AcceptBookingRequestAsync's Stripe capture
-        // succeeded but its DB transaction failed and rolled back (see the LogCritical there). This webhook
-        // is the durable backstop that reconciles Payment/BookingPaymentStatus; BookingRequest.Status itself
-        // is NOT touched here and may still be stuck at Pending — flagged below for manual follow-up.
-        var wasReconciliation = payment.Status == PaymentStatus.Authorized;
+        // Only reachable when the payment was still an uncaptured hold (Authorized / DepositAuthorized):
+        // AcceptBookingRequestAsync's Stripe capture succeeded but its DB transaction failed and rolled back
+        // (see the LogCritical there). This webhook is the durable backstop that reconciles
+        // Payment/BookingPaymentStatus to the correct captured state for the path; BookingRequest.Status
+        // itself is NOT touched here and may still be stuck at Pending — flagged below for manual follow-up.
+        var wasReconciliation = payment.Status is PaymentStatus.Authorized or PaymentStatus.DepositAuthorized;
 
-        payment.Status = PaymentStatus.Completed;
+        // A deposit hold captures to "deposit paid, remainder due" (Phase 1 has no remainder mechanism yet),
+        // never to fully paid; a full hold captures to Completed/Paid exactly as before.
+        payment.Status = payment.IsDeposit ? PaymentStatus.DepositPaid_RemainderDue : PaymentStatus.Completed;
         payment.PaidAt ??= DateTimeOffset.UtcNow;
         _unitOfWork.Repository<Payment, long>().Update(payment);
 
@@ -142,7 +146,7 @@ public class PaymentService : IPaymentService
         var booking = await bookingRepo.GetAsync(payment.BookingRequestId);
         if (booking is not null)
         {
-            booking.PaymentStatus = BookingPaymentStatus.Paid;
+            booking.PaymentStatus = payment.IsDeposit ? BookingPaymentStatus.DepositPaid : BookingPaymentStatus.Paid;
             booking.UpdatedAt = DateTimeOffset.UtcNow;
             bookingRepo.Update(booking);
 

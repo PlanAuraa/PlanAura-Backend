@@ -146,9 +146,9 @@ public class BookingHoldExpiryJobTests
         Assert.NotNull(payment.CancelledAt);
 
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            VendorUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            VendorUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -186,8 +186,8 @@ public class BookingHoldExpiryJobTests
         Assert.Equal(AvailabilityStatus.Available, hold.Status); // hold reset still happens regardless of void outcome
 
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            VendorUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            VendorUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 }

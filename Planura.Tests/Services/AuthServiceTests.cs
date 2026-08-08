@@ -163,10 +163,10 @@ public class AuthServiceTests
             .Returns(new JwtTokenResult { AccessToken = "fake-token", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) });
 
         _notificationServiceMock
-            .Setup(n => n.NotifyUserAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .Setup(n => n.NotifyUserAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .Returns(Task.CompletedTask);
         _notificationServiceMock
-            .Setup(n => n.NotifyRoleAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .Setup(n => n.NotifyRoleAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .Returns(Task.CompletedTask);
 
         _unitOfWorkMock.SetupRepository<Vendor, long>();
