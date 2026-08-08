@@ -9,9 +9,11 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
     public void Configure(EntityTypeBuilder<Payment> builder)
     {
         builder.Property(payment => payment.Amount).HasPrecision(12, 2);
+        builder.Property(payment => payment.DepositAmount).HasPrecision(12, 2);
+        builder.Property(payment => payment.TotalAmount).HasPrecision(12, 2);
         builder.Property(payment => payment.Status)
             .HasConversion<string>()
-            .HasMaxLength(20)
+            .HasMaxLength(30) // widened from 20 to fit "DepositPaid_RemainderDue" (24 chars) with headroom
             .IsRequired();
         builder.Property(payment => payment.PaymentMethod).HasMaxLength(30);
         builder.Property(payment => payment.GatewayReference).HasMaxLength(100);

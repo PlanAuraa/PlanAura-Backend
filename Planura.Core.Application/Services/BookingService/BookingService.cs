@@ -139,13 +139,19 @@ public class BookingService : IBookingService
                 "Your Booking Agreement has expired. Please review the agreement again before confirming.");
         }
 
+        // Full-vs-deposit decision (Phase 1). Both the total and the deposit are derived server-side
+        // from the package price (agreedPrice) — never from client input. Events close to now take the
+        // full-payment path (today's exact behavior); events further out authorize only the deposit.
+        var eventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime);
+        var plan = ResolvePaymentPlan(agreedPrice, eventDate);
+
         // Authorize the card hold before touching the database: if this fails (declined, insufficient
         // funds, etc.) no booking request or payment row is ever created — see the option (b) status
         // model discussion. The only failure window left is between this call succeeding and the
         // transaction below committing, which is handled with a compensating cancel in the catch blocks.
         var intentResult = await _paymentGatewayService.AuthorizePaymentIntentAsync(new AuthorizePaymentIntentRequest
         {
-            AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(agreedPrice),
+            AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(plan.AuthorizeAmount),
             Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
             PaymentMethodId = dto.PaymentMethodId,
             IdempotencyKey = dto.RequestId,
@@ -154,7 +160,10 @@ public class BookingService : IBookingService
                 ["client_id"] = facts.Client.Id.ToString(),
                 ["vendor_id"] = vendor.Id.ToString(),
                 ["event_plan_id"] = dto.EventPlanId.ToString(),
-                ["availability_id"] = dto.AvailabilityId.ToString()
+                ["availability_id"] = dto.AvailabilityId.ToString(),
+                ["is_deposit"] = plan.IsDeposit ? "true" : "false",
+                ["deposit_amount"] = plan.DepositAmount.ToString(),
+                ["total_amount"] = plan.TotalAmount.ToString()
             }
         });
 
@@ -164,7 +173,7 @@ public class BookingService : IBookingService
             ClientId = facts.Client.Id,
             VendorId = vendor.Id,
             VendorPackageId = dto.VendorPackageId,
-            EventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime),
+            EventDate = eventDate,
             GuestCount = dto.GuestCount,
             AgreedPrice = agreedPrice,
             ClientMessage = dto.ClientMessage,
@@ -182,8 +191,14 @@ public class BookingService : IBookingService
         {
             ClientId = facts.Client.Id,
             VendorId = vendor.Id,
-            Amount = agreedPrice,
-            Status = PaymentStatus.Authorized,
+            // Amount is what was actually authorized/held: the deposit on the deposit path, the full
+            // price on the full path. TotalAmount always carries the full price so the outstanding
+            // remainder is derivable later.
+            Amount = plan.AuthorizeAmount,
+            IsDeposit = plan.IsDeposit,
+            DepositAmount = plan.IsDeposit ? plan.DepositAmount : null,
+            TotalAmount = plan.TotalAmount,
+            Status = plan.IsDeposit ? PaymentStatus.DepositAuthorized : PaymentStatus.Authorized,
             PaymentMethod = dto.PaymentMethodId,
             GatewayReference = intentResult.PaymentIntentId,
             AuthorizedAt = DateTimeOffset.UtcNow,
@@ -557,6 +572,31 @@ public class BookingService : IBookingService
         return (percent, amount, daysUntilEvent);
     }
 
+    /// <summary>The full-vs-deposit split for a booking, all derived server-side from the package price.</summary>
+    private readonly record struct PaymentPlan(
+        bool IsDeposit, decimal AuthorizeAmount, decimal DepositAmount, decimal TotalAmount);
+
+    /// <summary>
+    /// Decides, at booking time, whether the client pays in full now or only a deposit, based on how
+    /// far away the event is. Events within <see cref="BookingOptions.FullPaymentThresholdDays"/> days
+    /// (inclusive) take the full-payment path — byte-for-byte today's behavior. Further out, only
+    /// <see cref="BookingOptions.DepositPercentage"/>% of the price is authorized. The days-until-event
+    /// calculation mirrors ResolveCancellationRefund (whole-day difference from UtcNow).
+    /// </summary>
+    private PaymentPlan ResolvePaymentPlan(decimal totalPrice, DateOnly eventDate)
+    {
+        var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        var daysUntilEvent = eventDate.DayNumber - today.DayNumber;
+
+        var deposit = Math.Round(
+            totalPrice * (_bookingOptions.DepositPercentage / 100m), 2, MidpointRounding.AwayFromZero);
+
+        var isDeposit = daysUntilEvent > _bookingOptions.FullPaymentThresholdDays;
+        var authorizeAmount = isDeposit ? deposit : totalPrice;
+
+        return new PaymentPlan(isDeposit, authorizeAmount, deposit, totalPrice);
+    }
+
     public async Task<BookingRequestDto> AcceptBookingRequestAsync(long bookingRequestId, long vendorUserId, bool agreementAccepted)
     {
         if (!agreementAccepted)
@@ -588,6 +628,9 @@ public class BookingService : IBookingService
 
         try
         {
+            // Captures the full authorized hold. On the deposit path only the deposit was authorized,
+            // so this captures exactly the deposit — the remainder is NOT collected here (Phase 1 has no
+            // remainder-charge mechanism yet). On the full path this captures the full price, as today.
             var captureResult = await _paymentGatewayService.CapturePaymentIntentAsync(new CapturePaymentIntentRequest
             {
                 PaymentIntentId = payment.GatewayReference!,
@@ -613,14 +656,18 @@ public class BookingService : IBookingService
                 "Ask the client to submit a new request with a valid payment method.");
         }
 
+        // Deposit path rests at "deposit paid, remainder due" — the deposit is captured but the booking
+        // is not fully paid (no remainder mechanism in Phase 1). Full path completes exactly as today.
+        var isDepositPath = payment.IsDeposit;
+
         var previousStatus = booking.Status;
         booking.Status = BookingStatus.Accepted;
-        booking.PaymentStatus = BookingPaymentStatus.Paid;
+        booking.PaymentStatus = isDepositPath ? BookingPaymentStatus.DepositPaid : BookingPaymentStatus.Paid;
         booking.RespondedAt = DateTimeOffset.UtcNow;
         booking.VendorAgreedAt = DateTimeOffset.UtcNow;
         booking.UpdatedAt = DateTimeOffset.UtcNow;
 
-        payment.Status = PaymentStatus.Completed;
+        payment.Status = isDepositPath ? PaymentStatus.DepositPaid_RemainderDue : PaymentStatus.Completed;
         payment.PaidAt = DateTimeOffset.UtcNow;
 
         await _unitOfWork.BeginTransactionAsync();
@@ -645,7 +692,9 @@ public class BookingService : IBookingService
                 PreviousStatus = previousStatus.ToString(),
                 NewStatus = BookingStatus.Accepted.ToString(),
                 ChangedByUserId = vendorUserId,
-                Notes = "Accepted by vendor; payment captured."
+                Notes = isDepositPath
+                    ? "Accepted by vendor; deposit captured, remainder due."
+                    : "Accepted by vendor; payment captured."
             };
             await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
 

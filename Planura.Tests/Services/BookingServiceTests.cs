@@ -129,15 +129,22 @@ public class BookingServiceTests
         IsActive = isActive
     };
 
-    private static VendorAvailability CreateSlot(AvailabilityStatus status = AvailabilityStatus.Available, Vendor? vendor = null) => new()
+    private static VendorAvailability CreateSlot(
+        AvailabilityStatus status = AvailabilityStatus.Available, Vendor? vendor = null, DateTimeOffset? startAt = null)
     {
-        Id = AvailabilityId,
-        VendorId = VendorId,
-        StartAt = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero),
-        EndAt = new DateTimeOffset(2026, 8, 1, 14, 0, 0, TimeSpan.Zero),
-        Status = status,
-        Vendor = vendor ?? CreateVendor()
-    };
+        // Default is a fixed date in the past relative to any realistic test run, so it always lands on
+        // the full-payment path (event within the threshold) — deposit tests pass an explicit future startAt.
+        var start = startAt ?? new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        return new()
+        {
+            Id = AvailabilityId,
+            VendorId = VendorId,
+            StartAt = start,
+            EndAt = start.AddHours(4),
+            Status = status,
+            Vendor = vendor ?? CreateVendor()
+        };
+    }
 
     private static BookingRequest CreateBooking(BookingStatus status = BookingStatus.Pending, long clientId = ClientId) => new()
     {
@@ -593,9 +600,98 @@ public class BookingServiceTests
         _unitOfWorkMock.Verify(u => u.RollbackTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
         _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.IsAny<CancelPaymentIntentRequest>()), Times.Never);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            VendorUserId, NotificationTypes.BookingRequestReceived, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            VendorUserId, NotificationTypes.BookingRequestReceived, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         Assert.Equal(ClientId, result.ClientId);
+    }
+
+    // ---------------- CreateBookingRequestAsync: full-vs-deposit decision (Phase 1, Section B) ----------------
+
+    /// <summary>Wires every repo the create happy-path needs for the given slot and returns the Payment
+    /// the service records, so the deposit-decision tests can assert on the authorized amount and split.</summary>
+    private async Task<(Payment Payment, AuthorizePaymentIntentRequest AuthorizeRequest)> RunCreateAndCapturePaymentAsync(
+        VendorAvailability slot, decimal basePrice = PackagePrice)
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>())).ReturnsAsync(slot);
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo(basePrice: basePrice);
+
+        AuthorizePaymentIntentRequest? authorizeRequest = null;
+        _paymentGatewayServiceMock
+            .Setup(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()))
+            .Callback<AuthorizePaymentIntentRequest>(r => authorizeRequest = r)
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_plan", ClientSecret = "secret", Status = "requires_capture" });
+        SetupAgreementToken();
+
+        _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        Payment? capturedPayment = null;
+        paymentRepo.Setup(r => r.AddAsync(It.IsAny<Payment>()))
+            .Callback<Payment>(p => capturedPayment = p)
+            .Returns(Task.CompletedTask);
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        var service = CreateService();
+        await service.CreateBookingRequestAsync(ClientUserId, CreateValidDto());
+
+        Assert.NotNull(capturedPayment);
+        Assert.NotNull(authorizeRequest);
+        return (capturedPayment!, authorizeRequest!);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_EventBeyondThreshold_AuthorizesDepositAndRecordsDepositPath()
+    {
+        // 60 days out (> 7-day threshold) => deposit path. Deposit = 20% of 5000 = 1000.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(60));
+
+        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+
+        Assert.Equal(100000, authorizeRequest.AmountInSmallestUnit); // 1000.00 EGP deposit
+        Assert.True(payment.IsDeposit);
+        Assert.Equal(1000m, payment.Amount);        // only the deposit is authorized/held
+        Assert.Equal(1000m, payment.DepositAmount);
+        Assert.Equal(PackagePrice, payment.TotalAmount);
+        Assert.Equal(PaymentStatus.DepositAuthorized, payment.Status);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_EventWithinThreshold_AuthorizesFullPayment()
+    {
+        // 3 days out (<= 7-day threshold) => full-payment path, identical to today's behavior.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3));
+
+        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+
+        Assert.Equal(500000, authorizeRequest.AmountInSmallestUnit); // full 5000.00 EGP
+        Assert.False(payment.IsDeposit);
+        Assert.Equal(PackagePrice, payment.Amount);
+        Assert.Null(payment.DepositAmount);
+        Assert.Equal(PackagePrice, payment.TotalAmount);
+        Assert.Equal(PaymentStatus.Authorized, payment.Status);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_EventExactlyAtThreshold_AuthorizesFullPayment()
+    {
+        // Exactly 7 days out: the threshold is inclusive, so this stays on the full-payment path.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(7));
+
+        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+
+        Assert.Equal(500000, authorizeRequest.AmountInSmallestUnit);
+        Assert.False(payment.IsDeposit);
+        Assert.Equal(PackagePrice, payment.Amount);
     }
 
     [Fact]
@@ -792,7 +888,7 @@ public class BookingServiceTests
             r => r.PaymentIntentId == "pi_to_void")), Times.Once);
         Assert.Equal(PaymentStatus.Cancelled, payment.Status);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         Assert.Equal(BookingStatus.Cancelled, result.Status);
     }
@@ -907,7 +1003,72 @@ public class BookingServiceTests
 
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, NotificationTypes.BookingAccepted, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, NotificationTypes.BookingAccepted, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+
+        Assert.Equal(BookingStatus.Accepted, result.Status);
+    }
+
+    [Fact]
+    public async Task AcceptBookingRequestAsync_DepositPath_CapturesDepositAndRestsAtRemainderDue()
+    {
+        SetupVendorUserRepo(CreateVendor());
+        var booking = CreateBooking();
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        // Deposit-path payment: only the deposit (1000) was authorized/held; total is 5000.
+        var payment = CreateAuthorizedPayment("pi_deposit_accept");
+        payment.Status = PaymentStatus.DepositAuthorized;
+        payment.IsDeposit = true;
+        payment.Amount = 1000m;
+        payment.DepositAmount = 1000m;
+        payment.TotalAmount = PackagePrice;
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _paymentGatewayServiceMock
+            .Setup(g => g.CapturePaymentIntentAsync(It.IsAny<CapturePaymentIntentRequest>()))
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_deposit_accept", ClientSecret = "secret", Status = "succeeded" });
+
+        var hold = CreateSlot(status: AvailabilityStatus.Held);
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        var historyRepo = _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        BookingStatusHistory? capturedHistory = null;
+        historyRepo.Setup(r => r.AddAsync(It.IsAny<BookingStatusHistory>()))
+            .Callback<BookingStatusHistory>(h => capturedHistory = h)
+            .Returns(Task.CompletedTask);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+        _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+
+        var service = CreateService();
+        var result = await service.AcceptBookingRequestAsync(1, VendorUserId, true);
+
+        // Booking is accepted but rests at "deposit paid, remainder due" — NOT fully paid.
+        Assert.Equal(BookingStatus.Accepted, booking.Status);
+        Assert.Equal(BookingPaymentStatus.DepositPaid, booking.PaymentStatus);
+
+        Assert.Equal(PaymentStatus.DepositPaid_RemainderDue, payment.Status);
+        Assert.NotNull(payment.PaidAt);
+        // The split is untouched by accept: the remainder is still recorded, just not collected.
+        Assert.Equal(1000m, payment.DepositAmount);
+        Assert.Equal(PackagePrice, payment.TotalAmount);
+
+        Assert.Equal(AvailabilityStatus.Booked, hold.Status);
+
+        Assert.NotNull(capturedHistory);
+        Assert.Contains("deposit", capturedHistory!.Notes, StringComparison.OrdinalIgnoreCase);
+
+        // Capture is the same call as the full path — it captures exactly what was held (the deposit).
+        _paymentGatewayServiceMock.Verify(g => g.CapturePaymentIntentAsync(It.Is<CapturePaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_deposit_accept")), Times.Once);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // Remainder is NOT charged in Phase 1: no second authorize/capture happens.
+        _paymentGatewayServiceMock.Verify(g => g.AuthorizePaymentIntentAsync(It.IsAny<AuthorizePaymentIntentRequest>()), Times.Never);
 
         Assert.Equal(BookingStatus.Accepted, result.Status);
     }
@@ -964,7 +1125,7 @@ public class BookingServiceTests
 
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -1099,7 +1260,7 @@ public class BookingServiceTests
 
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
-            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            ClientUserId, NotificationTypes.BookingRejected, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         Assert.Equal(BookingStatus.Rejected, result.Status);
     }

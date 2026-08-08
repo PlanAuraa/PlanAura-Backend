@@ -9,6 +9,15 @@ public class Payment
     public long ClientId { get; set; }
     public long VendorId { get; set; }
     public decimal Amount { get; set; }
+
+    // Deposit / partial-payment (Phase 1). Amount above is always the amount actually authorized/held
+    // (the deposit on the deposit path, the full price on the full path). These record the split so
+    // later phases and the vendor/admin/client UIs can show "deposit paid, remainder due" without
+    // recomputing. On the full-payment path IsDeposit is false and DepositAmount is null.
+    public bool IsDeposit { get; set; }
+    public decimal? DepositAmount { get; set; }
+    public decimal? TotalAmount { get; set; }
+
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
     public string? PaymentMethod { get; set; }
     public string? GatewayReference { get; set; }

@@ -111,7 +111,10 @@ namespace Planura.Core.Application.Services.AdminPayment
                     .Where(p => p.Status == PaymentStatus.Refunded)
                     .Sum(p => (decimal?)p.Amount) ?? 0m,
                 FailedPaymentCount = queryable.Count(p => p.Status == PaymentStatus.Failed),
-                PendingAuthorizationCount = queryable.Count(p => p.Status == PaymentStatus.Authorized)
+                // Both full holds (Authorized) and deposit holds (DepositAuthorized) are money held on a
+                // card awaiting the vendor — both count as pending authorization.
+                PendingAuthorizationCount = queryable.Count(p =>
+                    p.Status == PaymentStatus.Authorized || p.Status == PaymentStatus.DepositAuthorized)
             };
 
             return Task.FromResult(summary);
