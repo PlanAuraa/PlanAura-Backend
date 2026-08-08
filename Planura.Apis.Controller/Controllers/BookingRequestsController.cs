@@ -59,6 +59,18 @@ public class BookingRequestsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Client pays the outstanding remainder on their deposit booking on-session. If the response has
+    /// RequiresAction=true, the frontend completes authentication (SCA) using ClientSecret; otherwise the
+    /// booking is already fully paid.
+    /// </summary>
+    [HttpPost("{id:long}/pay-remainder")]
+    public async Task<ActionResult<PayRemainderResultDto>> PayRemainder(long id)
+    {
+        var result = await _bookingService.PayRemainderAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
     /// <summary>The permanent "Booking Activity" audit trail — the source of truth for what
     /// happened to this booking, independent of any (best-effort) notification.</summary>
     [HttpGet("{id:long}/timeline")]

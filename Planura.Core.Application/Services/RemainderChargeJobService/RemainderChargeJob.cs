@@ -97,6 +97,18 @@ public class RemainderChargeJob : IRemainderChargeJob
             return;
         }
 
+        // Atomic claim (shared with the client on-session pay-remainder flow): only the winner charges. If we
+        // can't claim, the client is paying it right now (or it was just resolved) — skip, do not charge.
+        var claimed = await _unitOfWork.TryClaimRemainderChargeAsync(payment.Id);
+        if (!claimed)
+        {
+            _logger.LogInformation(
+                "Remainder charge skipped for booking {BookingId} / payment {PaymentId}: could not claim it (client pay-remainder in progress or already resolved).",
+                booking.Id, payment.Id);
+            return;
+        }
+        payment.Status = PaymentStatus.RemainderCharging; // reflect the claim on the tracked entity
+
         try
         {
             // Layer 1: the stable idempotency key makes this a no-op-safe operation — a repeat or overlapping
@@ -147,9 +159,9 @@ public class RemainderChargeJob : IRemainderChargeJob
         await _unitOfWork.BeginTransactionAsync();
         try
         {
-            // Compare-and-set (layer 3): only record if the payment is still in the chargeable state, so a
-            // concurrent run that already recorded this remainder can't produce a duplicate write.
-            if (payment.Status != PaymentStatus.DepositPaid_RemainderDue)
+            // Compare-and-set (layer 3): we only record if we still hold the claim (RemainderCharging), so a
+            // concurrent actor that already resolved this remainder can't produce a duplicate write.
+            if (payment.Status != PaymentStatus.RemainderCharging)
             {
                 await _unitOfWork.RollbackTransactionAsync();
                 return false;
@@ -199,9 +211,9 @@ public class RemainderChargeJob : IRemainderChargeJob
         await _unitOfWork.BeginTransactionAsync();
         try
         {
-            // Compare-and-set (layer 3): only transition a payment that is still chargeable, so a run that
-            // races a concurrent success/failure can't overwrite the resolved state.
-            if (payment.Status != PaymentStatus.DepositPaid_RemainderDue)
+            // Compare-and-set (layer 3): we only transition a payment we still hold the claim on
+            // (RemainderCharging), so a run that races a concurrent success/failure can't overwrite it.
+            if (payment.Status != PaymentStatus.RemainderCharging)
             {
                 await _unitOfWork.RollbackTransactionAsync();
                 return false;

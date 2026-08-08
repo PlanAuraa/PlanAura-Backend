@@ -752,6 +752,167 @@ public class BookingServiceTests
         Assert.Null(payment.SavedPaymentMethodId);
     }
 
+    // ---------------- PayRemainderAsync: client on-session pay-remainder (Phase 3, Section D) ----------------
+
+    /// <summary>Wires the repos/mocks a PayRemainderAsync call needs and returns the tracked payment/booking.</summary>
+    private (BookingRequest Booking, Payment Payment) SetupPayRemainder(
+        PaymentStatus paymentStatus = PaymentStatus.DepositPaid_RemainderDue,
+        bool isDeposit = true,
+        string? savedPaymentMethodId = "pm_saved",
+        string? stripeCustomerId = "cus_x",
+        long bookingClientId = ClientId,
+        bool claimSucceeds = true)
+    {
+        var client = CreateClient();
+        client.StripeCustomerId = stripeCustomerId;
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(client);
+
+        var booking = CreateBooking(status: BookingStatus.Accepted, clientId: bookingClientId);
+        booking.PaymentStatus = BookingPaymentStatus.DepositPaid;
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var payment = new Payment
+        {
+            Id = 1,
+            BookingRequestId = 1,
+            ClientId = ClientId,
+            VendorId = VendorId,
+            IsDeposit = isDeposit,
+            DepositAmount = 1000m,
+            TotalAmount = PackagePrice,
+            SavedPaymentMethodId = savedPaymentMethodId,
+            Status = paymentStatus
+        };
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(claimSucceeds);
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
+
+        return (booking, payment);
+    }
+
+    private void SetupChargeOnSession(string status, string paymentIntentId = "pi_onsession", string? clientSecret = "cs_test")
+    {
+        _paymentGatewayServiceMock
+            .Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = paymentIntentId, ClientSecret = clientSecret, Status = status });
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_EligibleRemainderDue_ChargesAndMarksFullyPaidClearingGrace()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        payment.RemainderFailedAt = DateTimeOffset.UtcNow; // pretend a prior failure set the grace clock
+        ChargeOnSessionRequest? charge = null;
+        _paymentGatewayServiceMock.Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .Callback<ChargeOnSessionRequest>(r => charge = r)
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_onsession", ClientSecret = "cs", Status = "succeeded" });
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.Equal("succeeded", result.Status);
+        Assert.False(result.RequiresAction);
+        Assert.NotNull(charge);
+        Assert.Equal(400000, charge!.AmountInSmallestUnit);            // 5000 - 1000 = 4000.00
+        Assert.Equal("remainder-onsession-1", charge.IdempotencyKey);  // client's own stable key
+        Assert.Equal("cus_x", charge.CustomerId);
+        Assert.Equal("pm_saved", charge.PaymentMethodId);
+
+        Assert.Equal(PaymentStatus.FullyPaid, payment.Status);
+        Assert.Equal("pi_onsession", payment.RemainderGatewayReference);
+        Assert.Null(payment.RemainderFailedAt);                        // grace cleared
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_EligibleRemainderFailed_Succeeds()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.RemainderFailed);
+        SetupChargeOnSession("succeeded");
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.Equal("succeeded", result.Status);
+        Assert.Equal(PaymentStatus.FullyPaid, payment.Status);
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_RequiresAction_ReturnsClientSecretAndStaysCharging()
+    {
+        var (_, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        SetupChargeOnSession("requires_action", paymentIntentId: "pi_sca", clientSecret: "cs_sca");
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.True(result.RequiresAction);
+        Assert.Equal("requires_action", result.Status);
+        Assert.Equal("cs_sca", result.ClientSecret);
+        // Stays claimed (RemainderCharging) with the remainder PI id stored so the webhook can finalize it.
+        Assert.Equal(PaymentStatus.RemainderCharging, payment.Status);
+        Assert.Equal("pi_sca", payment.RemainderGatewayReference);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_IneligibleState_ThrowsBadRequest()
+    {
+        SetupPayRemainder(PaymentStatus.FullyPaid);
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_NotOwner_ThrowsNotFound()
+    {
+        SetupPayRemainder(bookingClientId: ClientId + 999); // booking belongs to a different client
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_FullPaymentPath_ThrowsBadRequest()
+    {
+        SetupPayRemainder(isDeposit: false); // full-payment booking has no remainder
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_CannotClaim_ThrowsBadRequestAndDoesNotCharge()
+    {
+        // Interleaving: the background job already claimed this payment -> client can't, and must not charge.
+        SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue, claimSucceeds: false);
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_ChargeDeclined_TransitionsRemainderFailedAndThrows()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        _paymentGatewayServiceMock.Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .ThrowsAsync(new PaymentDeclinedExeption("Your card was declined."));
+
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+
+        Assert.Equal(PaymentStatus.RemainderFailed, payment.Status);
+        Assert.NotNull(payment.RemainderFailedAt);
+        Assert.Equal(BookingPaymentStatus.RemainderFailed, booking.PaymentStatus);
+    }
+
     [Fact]
     public async Task CreateBookingRequestAsync_ConcurrencyConflictOnCommit_ThrowsSlotUnavailableRollsBackAndVoidsAuthorization()
     {

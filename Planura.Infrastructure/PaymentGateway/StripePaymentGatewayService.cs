@@ -155,6 +155,48 @@ namespace Planura.Infrastructure.PaymentGateway
             };
         }
 
+        public async Task<PaymentIntentResult> ChargeOnSessionAsync(ChargeOnSessionRequest request)
+        {
+            var createOptions = new PaymentIntentCreateOptions
+            {
+                Amount = request.AmountInSmallestUnit,
+                Currency = request.Currency,
+                Customer = request.CustomerId,
+                PaymentMethod = request.PaymentMethodId,
+                Confirm = true,
+                // On-session (client present): do NOT set OffSession, so SCA is allowed. AllowRedirects
+                // "never" keeps 3DS to the client-secret flow (frontend confirmCardPayment) — no redirect.
+                AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                {
+                    Enabled = true,
+                    AllowRedirects = "never",
+                },
+                Metadata = new Dictionary<string, string>(request.Metadata)
+            };
+
+            var requestOptions = new RequestOptions { IdempotencyKey = request.IdempotencyKey };
+
+            var service = new PaymentIntentService();
+            PaymentIntent intent;
+            try
+            {
+                intent = await service.CreateAsync(createOptions, requestOptions);
+            }
+            catch (StripeException ex)
+            {
+                // Hard card errors (declined, insufficient funds) throw; SCA does NOT — it returns
+                // requires_action below for the frontend to complete.
+                throw new PaymentDeclinedExeption(ex.StripeError?.Message ?? ex.Message);
+            }
+
+            return new PaymentIntentResult
+            {
+                PaymentIntentId = intent.Id,
+                ClientSecret = intent.ClientSecret,
+                Status = intent.Status
+            };
+        }
+
         public async Task CancelPaymentIntentAsync(CancelPaymentIntentRequest request)
         {
             var cancelOptions = new PaymentIntentCancelOptions

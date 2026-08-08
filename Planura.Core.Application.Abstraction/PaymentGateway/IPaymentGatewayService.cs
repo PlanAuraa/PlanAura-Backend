@@ -14,6 +14,13 @@ namespace Planura.Core.Application.Abstraction.PaymentGateway
         /// <summary>Charges a saved card off-session against a Customer + PaymentMethod (deposit remainder charge, Phase 2).</summary>
         Task<PaymentIntentResult> ChargeOffSessionAsync(ChargeOffSessionRequest request);
 
+        /// <summary>
+        /// Charges a saved card on-session (client present) with SCA support (Phase 3). Returns the
+        /// PaymentIntent's status: "succeeded" when no authentication was needed, or "requires_action"
+        /// (with a client secret) when the frontend must complete authentication. Only hard card errors throw.
+        /// </summary>
+        Task<PaymentIntentResult> ChargeOnSessionAsync(ChargeOnSessionRequest request);
+
         /// <summary>Voids a previously authorized (not yet captured) PaymentIntent, releasing the held funds.</summary>
         Task CancelPaymentIntentAsync(CancelPaymentIntentRequest request);
 

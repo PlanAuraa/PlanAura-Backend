@@ -921,6 +921,225 @@ public class BookingService : IBookingService
     }
 
     /// <summary>
+    /// Client pays the outstanding remainder on their deposit booking on-session (Phase 3). Eligible from
+    /// DepositPaid_RemainderDue (before the auto-charge job runs) or RemainderFailed (after a failed
+    /// auto-charge). Shares the background job's no-double-charge guard via an atomic claim: exactly one of
+    /// {this call, the job} ever transitions the payment into RemainderCharging and charges it. Supports SCA
+    /// — on requires_action the frontend completes authentication and the webhook finalizes the payment.
+    /// </summary>
+    public async Task<PayRemainderResultDto> PayRemainderAsync(long bookingRequestId, long clientUserId)
+    {
+        var client = await _unitOfWork.Repository<Client, long>()
+            .GetWithSpecAsync(new ClientByUserIdSpecification(clientUserId));
+        if (client is null)
+        {
+            throw new NotFoundExeption(nameof(Client), clientUserId);
+        }
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != client.Id)
+        {
+            // Ownership failures surface as NotFound so a client can't probe others' booking ids.
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+        if (payment is null || !payment.IsDeposit)
+        {
+            // Full-payment-path bookings have no remainder to pay.
+            throw new BadRequestExeption("This booking has no remaining balance to pay — it was paid in full up front.");
+        }
+
+        if (payment.Status is not (PaymentStatus.DepositPaid_RemainderDue or PaymentStatus.RemainderFailed))
+        {
+            throw new BadRequestExeption(
+                $"The remaining balance can't be paid from the current payment state ('{payment.Status}').");
+        }
+
+        if (string.IsNullOrWhiteSpace(payment.SavedPaymentMethodId) || string.IsNullOrWhiteSpace(client.StripeCustomerId))
+        {
+            throw new BadRequestExeption("No saved card is on file for this booking, so the remaining balance can't be charged.");
+        }
+
+        var remainder = (payment.TotalAmount ?? 0m) - (payment.DepositAmount ?? 0m);
+        if (remainder <= 0m)
+        {
+            throw new BadRequestExeption("There is no remaining balance to charge on this booking.");
+        }
+
+        // Atomic claim shared with the background remainder-charge job (see IUnitOfWork.TryClaimRemainderChargeAsync).
+        // If we can't claim, the job is charging it right now, an earlier SCA attempt is still in flight, or it
+        // was just paid — in every case we must NOT charge again.
+        var claimed = await _unitOfWork.TryClaimRemainderChargeAsync(payment.Id);
+        if (!claimed)
+        {
+            throw new BadRequestExeption(
+                "A payment for the remaining balance is already being processed for this booking. Please wait a moment and refresh.");
+        }
+        payment.Status = PaymentStatus.RemainderCharging; // reflect the claim on the tracked entity
+
+        PaymentIntentResult result;
+        try
+        {
+            result = await _paymentGatewayService.ChargeOnSessionAsync(new ChargeOnSessionRequest
+            {
+                AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(remainder),
+                Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
+                CustomerId = client.StripeCustomerId!,
+                PaymentMethodId = payment.SavedPaymentMethodId!,
+                // Distinct from the job's off-session key; the claim (not the key) is the cross-actor guard.
+                IdempotencyKey = $"remainder-onsession-{payment.Id}",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["booking_id"] = booking.Id.ToString(),
+                    ["payment_id"] = payment.Id.ToString(),
+                    ["kind"] = "remainder",
+                    ["channel"] = "on_session"
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // Hard decline: release the claim into RemainderFailed (grace clock starts) and surface the error.
+            await MarkRemainderFailedFromClaimAsync(booking, payment, "The on-session remainder payment was declined.");
+            throw;
+        }
+
+        if (result.Status == "succeeded")
+        {
+            await RecordRemainderPaidFromClaimAsync(booking, payment, result.PaymentIntentId, remainder);
+            await NotifyRemainderFullyPaidBestEffortAsync(booking, client.UserId);
+            return new PayRemainderResultDto
+            {
+                Status = result.Status,
+                PaymentIntentId = result.PaymentIntentId,
+                RequiresAction = false
+            };
+        }
+
+        // SCA required: store the remainder PI id so the webhook can finalize once the client authenticates
+        // in the browser; the payment stays RemainderCharging until then.
+        await StoreRemainderPendingActionAsync(payment, result.PaymentIntentId);
+        return new PayRemainderResultDto
+        {
+            Status = result.Status,
+            PaymentIntentId = result.PaymentIntentId,
+            ClientSecret = result.ClientSecret,
+            RequiresAction = true
+        };
+    }
+
+    private async Task RecordRemainderPaidFromClaimAsync(BookingRequest booking, Payment payment, string gatewayReference, decimal remainder)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            payment.Status = PaymentStatus.FullyPaid;
+            payment.RemainderGatewayReference = gatewayReference;
+            payment.RemainderChargedAt = now;
+            payment.RemainderFailedAt = null;       // ends the grace window
+            payment.RemainderFailureReason = null;
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+
+            booking.PaymentStatus = BookingPaymentStatus.Paid;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = booking.Status.ToString(),
+                NewStatus = booking.Status.ToString(),
+                ChangedByUserId = booking.Client?.UserId,
+                Notes = $"remaining balance paid by client on-session ({remainder:0.00}); booking is now fully paid"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogCritical(ex,
+                "REMAINDER RECONCILIATION NEEDED: on-session charge {GatewayReference} for booking {BookingId} / " +
+                "payment {PaymentId} succeeded at Stripe but recording FullyPaid failed and rolled back. " +
+                "The payment stays RemainderCharging; verify the payment_intent.succeeded webhook reconciles it.",
+                gatewayReference, booking.Id, payment.Id);
+            throw;
+        }
+    }
+
+    private async Task MarkRemainderFailedFromClaimAsync(BookingRequest booking, Payment payment, string reason)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            payment.Status = PaymentStatus.RemainderFailed;
+            payment.RemainderFailureReason = reason.Length > 500 ? reason[..500] : reason;
+            payment.RemainderFailedAt = now; // (re)start the grace clock
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+
+            booking.PaymentStatus = BookingPaymentStatus.RemainderFailed;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = booking.Status.ToString(),
+                NewStatus = booking.Status.ToString(),
+                ChangedByUserId = booking.Client?.UserId,
+                Notes = "on-session remainder payment was declined; booking is awaiting resolution"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogError(ex,
+                "Failed to record RemainderFailed after a declined on-session payment for booking {BookingId} / payment {PaymentId}.",
+                booking.Id, payment.Id);
+        }
+    }
+
+    /// <summary>SCA path: persist the remainder PI id (so the webhook can match it later) while the payment
+    /// stays RemainderCharging awaiting the client's browser-side authentication.</summary>
+    private async Task StoreRemainderPendingActionAsync(Payment payment, string gatewayReference)
+    {
+        payment.RemainderGatewayReference = gatewayReference;
+        _unitOfWork.Repository<Payment, long>().Update(payment);
+        await _unitOfWork.SaveChangesAsync();
+    }
+
+    private async Task NotifyRemainderFullyPaidBestEffortAsync(BookingRequest booking, long clientUserId)
+    {
+        await NotifyBestEffortAsync(() => _notificationService.NotifyUserWithEmailAsync(
+            clientUserId,
+            NotificationTypes.RemainderPaid,
+            "Your booking is now fully paid",
+            $"Your payment for the remaining balance on your booking for {booking.EventDate:d} was successful. " +
+            "Your booking is fully paid.",
+            emailSubject: "Your booking is fully paid",
+            emailBody: $"Your payment for the remaining balance on your booking for {booking.EventDate:d} was successful. " +
+                       "Your booking is now paid in full — thank you."));
+
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.PaymentReceived,
+                "Remaining balance received",
+                $"The remaining balance for the booking on {booking.EventDate:d} has been received."));
+        }
+    }
+
+    /// <summary>
     /// The persistent, permanent record of everything that has happened to a booking — created,
     /// accepted, cancellation requested/approved/rejected, disputed/resolved, completed, etc. This is
     /// the source of truth the client-facing "Booking Activity" panel reads, so an outcome is never

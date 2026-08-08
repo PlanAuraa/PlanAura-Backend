@@ -12,6 +12,10 @@ public interface IBookingService
     Task<CancellationQuoteDto> GetCancellationQuoteAsync(long bookingRequestId, long clientUserId);
     Task<BookingRequestDto> RequestCancellationAsync(long bookingRequestId, long clientUserId, string reason);
     Task<BookingRequestDto> GetBookingRequestAsync(long bookingRequestId, long clientUserId);
+
+    /// <summary>Client pays the outstanding remainder on their deposit booking on-session (Phase 3). Charges the
+    /// saved card with SCA support; returns whether the frontend must complete authentication.</summary>
+    Task<PayRemainderResultDto> PayRemainderAsync(long bookingRequestId, long clientUserId);
     Task<List<BookingStatusHistoryEntryDto>> GetBookingTimelineAsync(long bookingRequestId, long clientUserId);
     Task<PagedResult<BookingRequestDto>> ListMyBookingRequestsAsync(long clientUserId, BookingRequestFilterDto filter);
     Task<BookingRequestDto> FlagDisputeAsync(long bookingRequestId, long userId, string reason);

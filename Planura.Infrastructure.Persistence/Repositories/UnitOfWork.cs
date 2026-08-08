@@ -2,7 +2,10 @@ using System;
 using System.Collections;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Planura.Core.Domain.Entities;
+using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
 
 namespace Planura.Infrastructure.Persistence.Repositories;
@@ -85,6 +88,21 @@ public class UnitOfWork : IUnitOfWork
             await _currentTransaction.DisposeAsync();
             _currentTransaction = null;
         }
+    }
+
+    public async Task<bool> TryClaimRemainderChargeAsync(long paymentId, CancellationToken cancellationToken = default)
+    {
+        // Single atomic conditional UPDATE. Only the caller whose statement matches the row (still in an
+        // eligible state) transitions it to RemainderCharging; concurrent/subsequent callers affect 0 rows.
+        var rowsAffected = await _dbContext.Set<Payment>()
+            .Where(payment => payment.Id == paymentId
+                && (payment.Status == PaymentStatus.DepositPaid_RemainderDue
+                    || payment.Status == PaymentStatus.RemainderFailed))
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(payment => payment.Status, PaymentStatus.RemainderCharging),
+                cancellationToken);
+
+        return rowsAffected == 1;
     }
 
     public void Dispose()

@@ -26,5 +26,11 @@ public enum PaymentStatus
     // Deposit / partial-payment (Phase 2). The off-session remainder charge failed (insufficient funds,
     // card declined, SCA/authentication_required — all treated the same). The booking rests here; the job
     // does NOT retry it. Notification + grace-period + eventual resolution come in Phase 3.
-    RemainderFailed = 10
+    RemainderFailed = 10,
+
+    // Deposit / partial-payment (Phase 3). Transient claim state: exactly one actor (the background job OR
+    // the client's on-session pay-remainder) atomically transitions DepositPaid_RemainderDue/RemainderFailed
+    // into this before charging, so the two can never double-charge. Resolves to FullyPaid on success or
+    // back to RemainderFailed on failure. A payment left here (e.g. abandoned SCA) awaits reconciliation.
+    RemainderCharging = 11
 }

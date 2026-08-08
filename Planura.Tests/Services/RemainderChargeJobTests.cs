@@ -76,6 +76,11 @@ public class RemainderChargeJobTests
         clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(client);
 
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        // By default the job wins the atomic claim (DepositPaid_RemainderDue -> RemainderCharging).
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
     }
 
     [Fact]
@@ -212,6 +217,24 @@ public class RemainderChargeJobTests
 
         _paymentGatewayServiceMock.Verify(g => g.ChargeOffSessionAsync(It.IsAny<ChargeOffSessionRequest>()), Times.Once);
         Assert.Equal(PaymentStatus.RemainderFailed, payment.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_CannotClaim_SkipsWithoutCharging()
+    {
+        // Interleaving: the client's on-session pay-remainder already claimed this payment, so the job's
+        // atomic claim fails -> it must NOT charge (no double-charge).
+        var booking = CreateDepositBooking();
+        var payment = CreateRemainderDuePayment();
+        var client = new Client { Id = ClientId, UserId = ClientUserId, StripeCustomerId = "cus_x" };
+        SetupRepos(booking, payment, client);
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false); // client (or another run) holds the claim
+
+        await CreateJob().RunAsync();
+
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOffSessionAsync(It.IsAny<ChargeOffSessionRequest>()), Times.Never);
     }
 
     // ---- Spec-level filtering: full-path / not-due / non-accepted bookings must not be selected ----
