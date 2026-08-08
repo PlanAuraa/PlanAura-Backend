@@ -26,6 +26,11 @@ public class Payment
     public DateTimeOffset? RemainderChargedAt { get; set; }
     public string? RemainderFailureReason { get; set; }
 
+    // Deposit / partial-payment (Phase 3). When the off-session remainder charge failed and the grace
+    // window started. The grace period ends at RemainderFailedAt + GracePeriodDays; the grace-expiry job
+    // (later phase) uses this. Null unless the payment is in RemainderFailed.
+    public DateTimeOffset? RemainderFailedAt { get; set; }
+
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
     public string? PaymentMethod { get; set; }
     public string? GatewayReference { get; set; }
