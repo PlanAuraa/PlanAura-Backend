@@ -609,10 +609,12 @@ public class BookingServiceTests
 
     /// <summary>Wires every repo the create happy-path needs for the given slot and returns the Payment
     /// the service records, so the deposit-decision tests can assert on the authorized amount and split.</summary>
-    private async Task<(Payment Payment, AuthorizePaymentIntentRequest AuthorizeRequest)> RunCreateAndCapturePaymentAsync(
-        VendorAvailability slot, decimal basePrice = PackagePrice)
+    private async Task<(Payment Payment, AuthorizePaymentIntentRequest AuthorizeRequest, Client Client)> RunCreateAndCapturePaymentAsync(
+        VendorAvailability slot, decimal basePrice = PackagePrice, string? existingCustomerId = null)
     {
-        SetupClientRepo(CreateClient());
+        var client = CreateClient();
+        client.StripeCustomerId = existingCustomerId;
+        SetupClientRepo(client);
         var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
         eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
 
@@ -621,8 +623,16 @@ public class BookingServiceTests
 
         var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
         userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+        // The deposit path loads the client's user (for the Stripe Customer's email/name) when it creates one.
+        userRepo.Setup(r => r.GetAsync(ClientUserId))
+            .ReturnsAsync(new ApplicationUser { Id = ClientUserId, FullName = "Client User", Email = "client@test.local" });
 
         SetupPackageRepo(basePrice: basePrice);
+
+        // A newly created Stripe Customer resolves to this id; deposit tests assert it lands on the client.
+        _paymentGatewayServiceMock
+            .Setup(g => g.CreateCustomerAsync(It.IsAny<CreateCustomerRequest>()))
+            .ReturnsAsync("cus_new");
 
         AuthorizePaymentIntentRequest? authorizeRequest = null;
         _paymentGatewayServiceMock
@@ -646,7 +656,7 @@ public class BookingServiceTests
 
         Assert.NotNull(capturedPayment);
         Assert.NotNull(authorizeRequest);
-        return (capturedPayment!, authorizeRequest!);
+        return (capturedPayment!, authorizeRequest!, client);
     }
 
     [Fact]
@@ -655,7 +665,7 @@ public class BookingServiceTests
         // 60 days out (> 7-day threshold) => deposit path. Deposit = 20% of 5000 = 1000.
         var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(60));
 
-        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+        var (payment, authorizeRequest, _) = await RunCreateAndCapturePaymentAsync(slot);
 
         Assert.Equal(100000, authorizeRequest.AmountInSmallestUnit); // 1000.00 EGP deposit
         Assert.True(payment.IsDeposit);
@@ -671,7 +681,7 @@ public class BookingServiceTests
         // 3 days out (<= 7-day threshold) => full-payment path, identical to today's behavior.
         var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3));
 
-        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+        var (payment, authorizeRequest, _) = await RunCreateAndCapturePaymentAsync(slot);
 
         Assert.Equal(500000, authorizeRequest.AmountInSmallestUnit); // full 5000.00 EGP
         Assert.False(payment.IsDeposit);
@@ -687,11 +697,59 @@ public class BookingServiceTests
         // Exactly 7 days out: the threshold is inclusive, so this stays on the full-payment path.
         var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(7));
 
-        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+        var (payment, authorizeRequest, _) = await RunCreateAndCapturePaymentAsync(slot);
 
         Assert.Equal(500000, authorizeRequest.AmountInSmallestUnit);
         Assert.False(payment.IsDeposit);
         Assert.Equal(PackagePrice, payment.Amount);
+    }
+
+    // ---------------- CreateBookingRequestAsync: save card on deposit path (Phase 2, Section A) ----------------
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_DepositPath_CreatesCustomerSavesCardAndPersistsCustomerId()
+    {
+        // Client has no Stripe Customer yet -> one is created, attached to the deposit PI, and the card is
+        // saved off-session for the later remainder charge.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(60));
+
+        var (payment, authorizeRequest, client) = await RunCreateAndCapturePaymentAsync(slot);
+
+        _paymentGatewayServiceMock.Verify(g => g.CreateCustomerAsync(It.IsAny<CreateCustomerRequest>()), Times.Once);
+        Assert.Equal("cus_new", client.StripeCustomerId);           // persisted for reuse
+        Assert.Equal("cus_new", authorizeRequest.CustomerId);       // PI attached to the customer
+        Assert.True(authorizeRequest.SaveCardForOffSession);         // card saved off-session
+        Assert.Equal("pm_card_visa", payment.SavedPaymentMethodId); // saved for the remainder charge
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_DepositPath_ReusesExistingCustomer()
+    {
+        // Client already has a Stripe Customer -> reuse it, do not create another.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(60));
+
+        var (payment, authorizeRequest, client) = await RunCreateAndCapturePaymentAsync(slot, existingCustomerId: "cus_existing");
+
+        _paymentGatewayServiceMock.Verify(g => g.CreateCustomerAsync(It.IsAny<CreateCustomerRequest>()), Times.Never);
+        Assert.Equal("cus_existing", client.StripeCustomerId);
+        Assert.Equal("cus_existing", authorizeRequest.CustomerId);
+        Assert.True(authorizeRequest.SaveCardForOffSession);
+        Assert.Equal("pm_card_visa", payment.SavedPaymentMethodId);
+    }
+
+    [Fact]
+    public async Task CreateBookingRequestAsync_FullPaymentPath_DoesNotCreateCustomerOrSaveCard()
+    {
+        // Full path (event within threshold): no customer, no off-session save, nothing to charge later.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3));
+
+        var (payment, authorizeRequest, client) = await RunCreateAndCapturePaymentAsync(slot);
+
+        _paymentGatewayServiceMock.Verify(g => g.CreateCustomerAsync(It.IsAny<CreateCustomerRequest>()), Times.Never);
+        Assert.Null(client.StripeCustomerId);
+        Assert.Null(authorizeRequest.CustomerId);
+        Assert.False(authorizeRequest.SaveCardForOffSession);
+        Assert.Null(payment.SavedPaymentMethodId);
     }
 
     [Fact]

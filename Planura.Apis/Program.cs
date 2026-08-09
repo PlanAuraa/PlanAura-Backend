@@ -2,6 +2,7 @@ using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
 using Planura.Apis.Controller;
+using Planura.Apis.Jobs;
 using Planura.Apis.MiddleWares;
 using Planura.Core.Application.Extensions;
 using Planura.Core.Application.Services.BookingAutoCompleteJob;
@@ -73,6 +74,7 @@ builder.Services.AddHangfire(config => config
     .UseRecommendedSerializerSettings()
     .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddHangfireServer();
+builder.Services.AddScoped<RemainderChargeJobRunner>();
 
 var app = builder.Build();
 
@@ -94,6 +96,13 @@ using (var scope = app.Services.CreateScope())
         "booking-auto-complete",
         job => job.RunAsync(),
         "0 3 * * *");
+
+    // Deposit remainder charge (Phase 2). Runs hourly so a crash-recovery re-charge lands well inside
+    // Stripe's idempotency window; scheduled via the single-instance runner (DisableConcurrentExecution).
+    recurringJobs.AddOrUpdate<RemainderChargeJobRunner>(
+        "deposit-remainder-charge",
+        runner => runner.RunAsync(),
+        "0 * * * *");
 }
 
 
