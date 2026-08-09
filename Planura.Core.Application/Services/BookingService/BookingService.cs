@@ -40,6 +40,7 @@ public class BookingService : IBookingService
     private readonly INotificationService _notificationService;
     private readonly IPaymentGatewayService _paymentGatewayService;
     private readonly IContractService _contractService;
+    private readonly IBookingContractContextFactory _contractContextFactory;
     private readonly IAttachmentService _attachmentService;
     private readonly IAgreementPreviewStore _agreementPreviewStore;
     private readonly BookingOptions _bookingOptions;
@@ -52,6 +53,7 @@ public class BookingService : IBookingService
         INotificationService notificationService,
         IPaymentGatewayService paymentGatewayService,
         IContractService contractService,
+        IBookingContractContextFactory contractContextFactory,
         IAttachmentService attachmentService,
         IAgreementPreviewStore agreementPreviewStore,
         IOptions<BookingOptions> bookingOptions,
@@ -63,11 +65,52 @@ public class BookingService : IBookingService
         _notificationService = notificationService;
         _paymentGatewayService = paymentGatewayService;
         _contractService = contractService;
+        _contractContextFactory = contractContextFactory;
         _attachmentService = attachmentService;
         _agreementPreviewStore = agreementPreviewStore;
         _bookingOptions = bookingOptions.Value;
         _stripeOptions = stripeOptions.Value;
         _logger = logger;
+    }
+
+    public async Task<BookingPaymentQuoteDto> GetBookingPaymentQuoteAsync(long clientUserId, BookingPaymentQuoteRequestDto dto)
+    {
+        // Runs the same resolution the create path does, so a quote can never price a booking that
+        // would be rejected at submission (unavailable slot, wrong vendor's package, guest count over
+        // the package limit). The client is quoted for the booking they can actually make.
+        var facts = await ResolveBookingFactsAsync(
+            clientUserId, dto.EventPlanId, dto.AvailabilityId, dto.VendorPackageId, dto.GuestCount);
+
+        var eventDate = DateOnly.FromDateTime(facts.Slot.StartAt.UtcDateTime);
+
+        return BuildPaymentQuote(facts.AgreedPrice, eventDate);
+    }
+
+    /// <summary>
+    /// Renders the server's payment plan as the client-facing quote. Every figure comes from
+    /// <see cref="ResolvePaymentPlan"/> and <see cref="BookingOptions"/> — nothing is recomputed
+    /// anywhere else, so checkout, the contract and the actual charge cannot disagree.
+    /// </summary>
+    private BookingPaymentQuoteDto BuildPaymentQuote(decimal agreedPrice, DateOnly eventDate)
+    {
+        var plan = ResolvePaymentPlan(agreedPrice, eventDate);
+        var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+
+        return new BookingPaymentQuoteDto
+        {
+            Currency = _stripeOptions.DefaultCurrency,
+            TotalAmount = plan.TotalAmount,
+            AmountDueNow = plan.AuthorizeAmount,
+            RemainingAmount = Math.Round(plan.TotalAmount - plan.AuthorizeAmount, 2, MidpointRounding.AwayFromZero),
+            IsDeposit = plan.IsDeposit,
+            DepositPercentage = plan.IsDeposit ? _bookingOptions.DepositPercentage : null,
+            DaysUntilEvent = eventDate.DayNumber - today.DayNumber,
+            FullPaymentThresholdDays = _bookingOptions.FullPaymentThresholdDays,
+            VendorResponseWindowHours = _bookingOptions.HoldTtlHours,
+            // Phase 1 has no remainder-charge mechanism (see BookingOptions.RemainderChargeLeadDays),
+            // so the UI must not present the balance as a scheduled automatic payment.
+            RemainderCollectionScheduled = false
+        };
     }
 
     public async Task<AgreementPreviewResultDto> PreviewBookingAgreementAsync(long clientUserId, AgreementPreviewRequestDto dto)
@@ -82,9 +125,10 @@ public class BookingService : IBookingService
         }
 
         var eventDate = DateOnly.FromDateTime(facts.Slot.StartAt.UtcDateTime);
-        var contractDto = BuildBookingContractDto(facts, clientUser, dto.GuestCount, dto.ClientMessage, eventDate);
+        var contractContext = BuildBookingContractContext(
+            facts, clientUser, dto.GuestCount, dto.ClientMessage, dto.BuildClientRequirements(), eventDate);
 
-        var document = await _contractService.GenerateBookingContractAsync(contractDto);
+        var document = await _contractService.GenerateBookingContractAsync(contractContext);
         var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(
             document.Content, document.FileName, BookingContractsFolder);
         if (relativeUrl is null)
@@ -101,7 +145,10 @@ public class BookingService : IBookingService
             Token = token,
             ContractId = document.ContractId,
             DocumentUrl = _attachmentService.ToAbsoluteUrl(relativeUrl)!,
-            GeneratedAt = generatedAt
+            GeneratedAt = generatedAt,
+            // Same price and payment plan the contract was drafted from, so checkout restates exactly
+            // what the client just read rather than deriving it independently.
+            PaymentPlan = BuildPaymentQuote(facts.AgreedPrice, eventDate)
         };
     }
 
@@ -176,7 +223,9 @@ public class BookingService : IBookingService
             EventDate = eventDate,
             GuestCount = dto.GuestCount,
             AgreedPrice = agreedPrice,
-            ClientMessage = dto.ClientMessage,
+            // Note plus stated requirements, so the vendor accepts against the same requirements the
+            // Booking Agreement was drafted from.
+            ClientMessage = dto.BuildPersistedClientMessage(),
             Status = BookingStatus.Pending,
             PaymentStatus = BookingPaymentStatus.Unpaid,
             // Bind the exact agreement the client reviewed (generated at the payment step) and stamp
@@ -1097,12 +1146,19 @@ public class BookingService : IBookingService
 
     /// <summary>The fully-resolved, validated parties and slot behind a booking — shared by the agreement
     /// preview and the actual booking creation so both apply identical rules and see the same facts.</summary>
+    /// <summary>
+    /// The resolved facts of one booking. <see cref="Package"/> and <see cref="Category"/> are carried
+    /// in full rather than collapsed to a price: they are what the booking is actually FOR, and the
+    /// Booking Agreement cannot describe the deal without them.
+    /// </summary>
     private sealed record BookingFacts(
         Client Client,
         Vendor Vendor,
         ApplicationUser VendorUser,
         EventPlan EventPlan,
         VendorAvailability Slot,
+        VendorPackage Package,
+        ServiceCategory? Category,
         decimal AgreedPrice);
 
     /// <summary>
@@ -1182,35 +1238,59 @@ public class BookingService : IBookingService
             throw new BadRequestExeption("A package must be selected so a price can be authorized for this booking.");
         }
 
-        return new BookingFacts(client, vendor, vendorUser, eventPlan, slot, package.BasePrice);
+        // The vendor's service category names what kind of contract this is (photography, catering,
+        // planning…), which drives the service-specific clauses. Loaded by id rather than by widening
+        // VendorAvailabilityByIdSpecification, since that spec is shared with paths that don't need it.
+        var category = vendor.CategoryId is { } categoryId
+            ? await _unitOfWork.Repository<ServiceCategory, long>().GetAsync(categoryId)
+            : null;
+
+        return new BookingFacts(client, vendor, vendorUser, eventPlan, slot, package, category, package.BasePrice);
     }
 
-    /// <summary>Builds the Event Booking Contract input from resolved facts plus the client's account
-    /// (loaded only for the preview, since booking creation doesn't need it). Shared so the agreement the
-    /// client previews is drafted from exactly the same fields the accepted contract would have been.</summary>
-    private GenerateContractDto BuildBookingContractDto(
-        BookingFacts facts, ApplicationUser clientUser, int? guestCount, string? clientMessage, DateOnly eventDate)
+    /// <summary>
+    /// Builds the Booking Agreement input from resolved facts plus the client's account (loaded only
+    /// for the preview, since booking creation doesn't need it). Assembled fresh on every call from
+    /// this request's own entities, so no data from another client's booking can reach this contract.
+    /// <para>
+    /// The payment plan is resolved here as well as at creation time, deliberately: the agreement the
+    /// client reads before paying must state the same deposit/balance split the platform is about to
+    /// charge, rather than describing payment in general terms.
+    /// </para>
+    /// </summary>
+    private ContractGenerationContext BuildBookingContractContext(
+        BookingFacts facts,
+        ApplicationUser clientUser,
+        int? guestCount,
+        string? clientMessage,
+        IReadOnlyList<string> clientRequirements,
+        DateOnly eventDate,
+        long? bookingRequestId = null,
+        string? bookingStatus = null)
     {
-        return new GenerateContractDto
+        var paymentPlan = ResolvePaymentPlan(facts.AgreedPrice, eventDate);
+
+        return _contractContextFactory.Create(new BookingContractInput
         {
-            ClientName = clientUser.FullName,
-            ClientEmail = clientUser.Email,
-            ClientPhone = clientUser.PhoneNumber,
-            ClientAddress = facts.Client.City,
-            ClientRepresentativeName = clientUser.FullName,
-            VendorName = facts.Vendor.BusinessName,
-            VendorEmail = facts.VendorUser.Email,
-            VendorPhone = facts.VendorUser.PhoneNumber,
-            VendorAddress = string.IsNullOrWhiteSpace(facts.Vendor.Address) ? facts.Vendor.City : facts.Vendor.Address,
-            VendorRepresentativeName = facts.VendorUser.FullName,
-            EventType = facts.EventPlan.EventType,
+            Client = facts.Client,
+            ClientUser = clientUser,
+            Vendor = facts.Vendor,
+            VendorUser = facts.VendorUser,
+            EventPlan = facts.EventPlan,
+            Slot = facts.Slot,
+            Package = facts.Package,
+            Category = facts.Category,
             EventDate = eventDate,
-            EventLocation = facts.EventPlan.City,
             GuestCount = guestCount ?? facts.EventPlan.GuestCount,
-            Price = facts.AgreedPrice,
+            ClientRequirements = clientRequirements,
+            ClientNote = clientMessage,
             Currency = _stripeOptions.DefaultCurrency,
-            AdditionalTerms = clientMessage
-        };
+            TotalAmount = paymentPlan.TotalAmount,
+            IsDepositSchedule = paymentPlan.IsDeposit,
+            DepositAmount = paymentPlan.DepositAmount,
+            BookingRequestId = bookingRequestId,
+            BookingStatus = bookingStatus
+        });
     }
 
     /// <summary>
@@ -1260,7 +1340,63 @@ public class BookingService : IBookingService
             dto.SlotEndAt = slot.EndAt;
         }
 
+        dto.Payment = BuildPaymentSummary(booking);
+
         return dto;
+    }
+
+    /// <summary>
+    /// Projects the booking's payment row into the client/vendor-facing summary.
+    /// <para>
+    /// The distinction this exists to preserve: Planura authorizes at submission and captures only on
+    /// vendor accept, so for the whole pending window money is held but not taken. Reporting a single
+    /// "amount paid" would misstate that, so authorized and captured are reported separately and the
+    /// UI can say which one actually happened.
+    /// </para>
+    /// <para>
+    /// Requires <c>Payments</c> to have been included by the spec that loaded the booking (the by-id,
+    /// by-client and by-vendor specs all do), or to have been fixed up by the change tracker after the
+    /// same request already touched the row — which is the case on the accept/reject/cancel paths.
+    /// A booking whose payment simply is not loaded yields null rather than fabricated zeroes.
+    /// </para>
+    /// </summary>
+    private BookingPaymentSummaryDto? BuildPaymentSummary(BookingRequest booking)
+    {
+        // Newest first: a booking has one payment today, but ordering makes this correct rather than
+        // incidentally correct if a retry path ever adds a second row.
+        var payment = booking.Payments?.OrderByDescending(p => p.CreatedAt).FirstOrDefault();
+        if (payment is null)
+        {
+            return null;
+        }
+
+        // TotalAmount was only introduced with the deposit work; rows written before it fall back to
+        // the amount that was authorized, which was the full price on that path.
+        var total = payment.TotalAmount ?? payment.Amount;
+
+        var isCaptured = payment.Status is PaymentStatus.Completed or PaymentStatus.DepositPaid_RemainderDue;
+        var isHeld = payment.Status is PaymentStatus.Authorized or PaymentStatus.DepositAuthorized;
+
+        var amountPaid = isCaptured ? payment.Amount : 0m;
+
+        return new BookingPaymentSummaryDto
+        {
+            PaymentId = payment.Id,
+            Currency = _stripeOptions.DefaultCurrency,
+            TotalAmount = total,
+            AmountAuthorized = isHeld ? payment.Amount : 0m,
+            AmountPaid = amountPaid,
+            RemainingAmount = Math.Round(Math.Max(total - amountPaid, 0m), 2, MidpointRounding.AwayFromZero),
+            IsDeposit = payment.IsDeposit,
+            DepositAmount = payment.DepositAmount,
+            RemainderCollectionScheduled = false,
+            Status = payment.Status,
+            Reference = payment.GatewayReference,
+            AuthorizedAt = payment.AuthorizedAt,
+            PaidAt = payment.PaidAt,
+            RefundedAt = payment.RefundedAt,
+            CreatedAt = payment.CreatedAt
+        };
     }
 
     /// <summary>

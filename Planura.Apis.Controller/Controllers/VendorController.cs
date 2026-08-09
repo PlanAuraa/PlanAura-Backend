@@ -21,7 +21,10 @@ public class VendorController : ControllerBase
         _currentUserService = currentUserService;
     }
 
-    [Authorize(Policy = AuthorizationPolicies.ClientOnly)]
+    // Public marketplace browse — guests can explore vendors without an account;
+    // login is only required to actually book. See VendorPackagesController for
+    // the matching change on package search/listing.
+    [AllowAnonymous]
     [HttpGet]
     public async Task<ActionResult<PagedResult<VendorListItemDto>>> BrowseVendors([FromQuery] VendorBrowseFilterDto filter)
     {

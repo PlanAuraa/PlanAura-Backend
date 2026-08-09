@@ -47,6 +47,37 @@ namespace Planura.Infrastructure.Contract
             public int? Number { get; init; }
             public string Title { get; init; } = string.Empty;
             public List<string> Paragraphs { get; } = new();
+
+            /// <summary>Enumerated points rendered as (a), (b), (c)… Only ever populated on the structured path.</summary>
+            public List<string> Items { get; } = new();
+        }
+
+        /// <summary>
+        /// Builds the render model from pre-structured clauses. Clause count and shape are whatever the
+        /// document actually needs - nothing here assumes a fixed set of sections.
+        /// </summary>
+        private static List<ContractSection> BuildSections(IReadOnlyList<ContractSectionContent> sections)
+        {
+            var result = new List<ContractSection>(sections.Count);
+            var number = 1;
+
+            foreach (var source in sections)
+            {
+                var section = new ContractSection
+                {
+                    Number = number++,
+                    Title = (source.Title ?? string.Empty).Trim().TrimEnd('.')
+                };
+
+                section.Paragraphs.AddRange(
+                    source.Paragraphs.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()));
+                section.Items.AddRange(
+                    source.Items.Where(i => !string.IsNullOrWhiteSpace(i)).Select(i => i.Trim()));
+
+                result.Add(section);
+            }
+
+            return result;
         }
 
         private static readonly Regex SectionHeadingRegex =
@@ -135,7 +166,12 @@ namespace Planura.Infrastructure.Contract
             public ContractDocument(ContractPdfModel model)
             {
                 _model = model;
-                _sections = ParseSections(model.ContractBody);
+
+                // Structured clauses render directly; the SECTION-heading parser stays as the path for
+                // documents still generated as free prose (the Vendor Partnership Agreement).
+                _sections = model.Sections.Count > 0
+                    ? BuildSections(model.Sections)
+                    : ParseSections(model.ContractBody ?? string.Empty);
             }
 
             public DocumentMetadata GetMetadata()
@@ -422,8 +458,37 @@ namespace Planura.Infrastructure.Contract
                             {
                                 c.Item().Text(paragraph).FontSize(9.3f).FontColor(Palette.Charcoal).LineHeight(1.35f).Justify();
                             }
+
+                            for (var i = 0; i < section.Items.Count; i++)
+                            {
+                                var marker = ItemMarker(i);
+                                var item = section.Items[i];
+
+                                c.Item().PaddingLeft(6).Row(row =>
+                                {
+                                    row.ConstantItem(22).Text(marker).FontSize(9.3f).Bold().FontColor(Palette.RoseGold);
+                                    row.RelativeItem()
+                                        .Text(item).FontSize(9.3f).FontColor(Palette.Charcoal).LineHeight(1.35f).Justify();
+                                });
+                            }
                         });
                     });
+            }
+
+            /// <summary>(a), (b) … (z), then (aa), (ab) … so a long clause list never runs out of markers.</summary>
+            private static string ItemMarker(int index)
+            {
+                var label = string.Empty;
+                var n = index;
+
+                do
+                {
+                    label = (char)('a' + (n % 26)) + label;
+                    n = (n / 26) - 1;
+                }
+                while (n >= 0);
+
+                return $"({label})";
             }
 
             private void ComposeSignatureBlock(IContainer container)

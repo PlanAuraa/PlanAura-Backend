@@ -21,8 +21,18 @@ namespace Planura.Core.Application.Abstraction.Contract
         /// <summary>Short line introducing the contract at the top of the first content page.</summary>
         public string IntroParagraph { get; set; } = null!;
 
-        /// <summary>Gemini-generated contract text, formatted with "SECTION n: TITLE" headings.</summary>
-        public string ContractBody { get; set; } = null!;
+        /// <summary>
+        /// Gemini-generated contract text, formatted with "SECTION n: TITLE" headings. Used only when
+        /// <see cref="Sections"/> is empty - i.e. for document types still generated as free prose.
+        /// </summary>
+        public string ContractBody { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Pre-structured clauses. When non-empty these are rendered directly and
+        /// <see cref="ContractBody"/> is ignored, so clause count and shape can vary per contract
+        /// instead of being recovered from a fixed heading format.
+        /// </summary>
+        public IReadOnlyList<ContractSectionContent> Sections { get; set; } = Array.Empty<ContractSectionContent>();
 
         public ContractPartyDto PartyA { get; set; } = null!;
         public ContractPartyDto PartyB { get; set; } = null!;

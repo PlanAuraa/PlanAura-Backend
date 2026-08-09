@@ -25,6 +25,9 @@ public class MappingProfile : Profile
         CreateMap<VendorAvailability, VendorAvailabilityDto>();
 
         CreateMap<BookingRequest, BookingRequestDto>()
+            // Payment is projected by BookingService.BuildPaymentSummary, which needs the configured
+            // currency and the authorized-vs-captured distinction - neither available to a plain map.
+            .ForMember(d => d.Payment, opt => opt.Ignore())
             .ForMember(d => d.ReviewId, opt => opt.MapFrom(s => s.Review != null ? s.Review.Id : (long?)null))
             .ForMember(d => d.ReviewRating, opt => opt.MapFrom(s => s.Review != null ? (int?)s.Review.Rating : null))
             .ForMember(d => d.ReviewComment, opt => opt.MapFrom(s => s.Review != null ? s.Review.Comment : null));

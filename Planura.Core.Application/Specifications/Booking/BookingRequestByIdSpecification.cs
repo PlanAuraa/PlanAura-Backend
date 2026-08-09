@@ -9,5 +9,7 @@ public class BookingRequestByIdSpecification : BaseSpecification<BookingRequest>
     {
         AddInclude(booking => booking.Client.User);
         AddInclude(booking => booking.VendorAvailability);
+        // Needed for the payment summary on the DTO: what was authorized vs actually captured.
+        AddInclude(booking => booking.Payments);
     }
 }

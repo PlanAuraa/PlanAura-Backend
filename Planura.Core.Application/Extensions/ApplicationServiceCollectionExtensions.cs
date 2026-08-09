@@ -60,6 +60,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminClientService, AdminClientService>();
         services.AddScoped<IAdminReportService, AdminReportService>();
         services.AddScoped<IContractService, ContractService>();
+        // Stateless; scoped alongside the services that consume it so a context is always built fresh
+        // per request rather than shared across concurrent booking generations.
+        services.AddScoped<IBookingContractContextFactory, BookingContractContextFactory>();
         services.AddTransient(typeof(IEmailService), typeof(EmailService));
         services.Configure<MailSettings>(configuration.GetSection("MailSettings"));
 

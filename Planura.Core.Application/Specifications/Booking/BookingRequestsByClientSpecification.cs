@@ -13,6 +13,8 @@ public class BookingRequestsByClientSpecification : BaseSpecification<BookingReq
         AddInclude(booking => booking.Client.User);
         AddInclude(booking => booking.Review!);
         AddInclude(booking => booking.VendorAvailability);
+        // Needed for the payment summary on the DTO: what was authorized vs actually captured.
+        AddInclude(booking => booking.Payments);
         ApplyOrderByDescending(booking => booking.CreatedAt);
 
         if (skip is not null && take is not null)

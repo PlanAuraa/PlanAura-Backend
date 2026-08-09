@@ -43,12 +43,21 @@ public class BookingServiceTests
         cfg => cfg.AddProfile<MappingProfile>(),
         NullLoggerFactory.Instance).CreateMapper();
 
+    /// <summary>
+    /// The real factory rather than a mock: it is a pure mapping from already-resolved entities onto
+    /// the contract context, so exercising it here keeps the tests honest about what the booking flow
+    /// actually hands to contract generation.
+    /// </summary>
+    private static readonly IBookingContractContextFactory ContractContextFactory =
+        new BookingContractContextFactory(Options.Create(new BookingOptions { HoldTtlHours = 48 }));
+
     private BookingService CreateService() => new(
         _unitOfWorkMock.Object,
         _mapper,
         _notificationServiceMock.Object,
         _paymentGatewayServiceMock.Object,
         _contractServiceMock.Object,
+        ContractContextFactory,
         _attachmentServiceMock.Object,
         _agreementPreviewStoreMock.Object,
         Options.Create(new BookingOptions { HoldTtlHours = 48 }),
@@ -1534,6 +1543,204 @@ public class BookingServiceTests
         Assert.NotNull(capturedHistory);
         Assert.Contains("Vendor never showed up.", capturedHistory!.Notes);
         Assert.Equal(DisputeStatus.Open, result.DisputeStatus);
+    }
+
+    // ==================================================== Checkout pricing and payment reporting
+    //
+    // These cover the two figures the checkout UI shows and must never get wrong: what will be taken
+    // now (the quote, before a booking exists) and what has actually been taken (the summary, after).
+    // The authorized-vs-captured distinction is the point — Planura holds the card at booking and only
+    // charges on vendor accept, so reporting a held amount as paid would misinform the client.
+
+    private void SetupQuoteResolution(VendorAvailability slot, decimal basePrice = PackagePrice)
+    {
+        SetupClientRepo(CreateClient());
+
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>())).ReturnsAsync(slot);
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+
+        SetupPackageRepo(basePrice: basePrice);
+    }
+
+    private static BookingPaymentQuoteRequestDto QuoteDto() => new()
+    {
+        EventPlanId = EventPlanId,
+        AvailabilityId = AvailabilityId,
+        VendorPackageId = PackageId
+    };
+
+    [Fact]
+    public async Task GetBookingPaymentQuoteAsync_EventBeyondThreshold_SplitsDepositAndRemainder()
+    {
+        // 60 days out (> the 7-day threshold) => deposit path. 20% of 5000 = 1000 now, 4000 left.
+        SetupQuoteResolution(CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(60)));
+
+        var quote = await CreateService().GetBookingPaymentQuoteAsync(ClientUserId, QuoteDto());
+
+        Assert.True(quote.IsDeposit);
+        Assert.Equal(PackagePrice, quote.TotalAmount);
+        Assert.Equal(1000m, quote.AmountDueNow);
+        Assert.Equal(4000m, quote.RemainingAmount);
+        Assert.Equal(20m, quote.DepositPercentage);
+        Assert.Equal(7, quote.FullPaymentThresholdDays);
+        Assert.Equal(48, quote.VendorResponseWindowHours);
+        Assert.Equal("EGP", quote.Currency);
+
+        // The balance must never be presented as an automatic future charge: no such mechanism exists.
+        Assert.False(quote.RemainderCollectionScheduled);
+    }
+
+    [Fact]
+    public async Task GetBookingPaymentQuoteAsync_EventWithinThreshold_TakesFullAmountWithNothingLeft()
+    {
+        SetupQuoteResolution(CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3)));
+
+        var quote = await CreateService().GetBookingPaymentQuoteAsync(ClientUserId, QuoteDto());
+
+        Assert.False(quote.IsDeposit);
+        Assert.Equal(PackagePrice, quote.TotalAmount);
+        Assert.Equal(PackagePrice, quote.AmountDueNow);
+        Assert.Equal(0m, quote.RemainingAmount);
+        Assert.Null(quote.DepositPercentage);
+    }
+
+    [Fact]
+    public async Task GetBookingPaymentQuoteAsync_MatchesWhatCreateActuallyAuthorizes()
+    {
+        // The quote is only useful if it predicts the real charge, so assert them against each other
+        // rather than against a hardcoded figure: both must come from ResolvePaymentPlan.
+        var slot = CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(45));
+
+        SetupQuoteResolution(slot);
+        var quote = await CreateService().GetBookingPaymentQuoteAsync(ClientUserId, QuoteDto());
+
+        var (payment, authorizeRequest) = await RunCreateAndCapturePaymentAsync(slot);
+
+        Assert.Equal(quote.AmountDueNow, payment.Amount);
+        Assert.Equal(quote.TotalAmount, payment.TotalAmount);
+        Assert.Equal(quote.IsDeposit, payment.IsDeposit);
+        Assert.Equal(StripeAmountConverter.ToSmallestUnit(quote.AmountDueNow), authorizeRequest.AmountInSmallestUnit);
+    }
+
+    [Fact]
+    public async Task GetBookingPaymentQuoteAsync_SlotNoLongerAvailable_Throws()
+    {
+        // A quote must not price a booking that could not be made.
+        SetupQuoteResolution(CreateSlot(AvailabilityStatus.Booked));
+
+        await Assert.ThrowsAsync<SlotUnavailableExeption>(
+            () => CreateService().GetBookingPaymentQuoteAsync(ClientUserId, QuoteDto()));
+    }
+
+    /// <summary>Loads a booking carrying the given payment through the client-facing get-by-id path.</summary>
+    private async Task<BookingPaymentSummaryDto?> GetPaymentSummaryAsync(Payment payment)
+    {
+        SetupClientRepo(CreateClient());
+
+        var booking = CreateBooking();
+        booking.Payments.Add(payment);
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<BookingRequest>>())).ReturnsAsync(booking);
+
+        var result = await CreateService().GetBookingRequestAsync(1, ClientUserId);
+        return result.Payment;
+    }
+
+    [Fact]
+    public async Task PaymentSummary_WhileOnlyAuthorized_ReportsHeldNotPaid()
+    {
+        var payment = CreateAuthorizedPayment();
+        payment.Status = PaymentStatus.Authorized;
+        payment.Amount = PackagePrice;
+        payment.TotalAmount = PackagePrice;
+
+        var summary = await GetPaymentSummaryAsync(payment);
+
+        Assert.NotNull(summary);
+        Assert.Equal(PackagePrice, summary!.AmountAuthorized);
+        Assert.Equal(0m, summary.AmountPaid);
+        Assert.Equal(PackagePrice, summary.RemainingAmount);
+        Assert.Equal(PaymentStatus.Authorized, summary.Status);
+    }
+
+    [Fact]
+    public async Task PaymentSummary_AfterDepositCaptured_ReportsDepositPaidAndBalanceOutstanding()
+    {
+        var payment = CreateAuthorizedPayment();
+        payment.Status = PaymentStatus.DepositPaid_RemainderDue;
+        payment.IsDeposit = true;
+        payment.Amount = 1000m;
+        payment.DepositAmount = 1000m;
+        payment.TotalAmount = PackagePrice;
+        payment.PaidAt = DateTimeOffset.UtcNow;
+
+        var summary = await GetPaymentSummaryAsync(payment);
+
+        Assert.NotNull(summary);
+        Assert.Equal(0m, summary!.AmountAuthorized);   // captured, no longer merely held
+        Assert.Equal(1000m, summary.AmountPaid);
+        Assert.Equal(4000m, summary.RemainingAmount);
+        Assert.True(summary.IsDeposit);
+        Assert.False(summary.RemainderCollectionScheduled);
+    }
+
+    [Fact]
+    public async Task PaymentSummary_AfterFullCapture_ReportsNothingOutstanding()
+    {
+        var payment = CreateAuthorizedPayment();
+        payment.Status = PaymentStatus.Completed;
+        payment.Amount = PackagePrice;
+        payment.TotalAmount = PackagePrice;
+        payment.PaidAt = DateTimeOffset.UtcNow;
+
+        var summary = await GetPaymentSummaryAsync(payment);
+
+        Assert.NotNull(summary);
+        Assert.Equal(PackagePrice, summary!.AmountPaid);
+        Assert.Equal(0m, summary.RemainingAmount);
+        Assert.Equal(0m, summary.AmountAuthorized);
+    }
+
+    [Fact]
+    public async Task PaymentSummary_AfterHoldReleased_ReportsNeitherHeldNorPaid()
+    {
+        var payment = CreateAuthorizedPayment();
+        payment.Status = PaymentStatus.Cancelled;
+        payment.Amount = PackagePrice;
+        payment.TotalAmount = PackagePrice;
+        payment.CancelledAt = DateTimeOffset.UtcNow;
+
+        var summary = await GetPaymentSummaryAsync(payment);
+
+        Assert.NotNull(summary);
+        Assert.Equal(0m, summary!.AmountAuthorized);
+        Assert.Equal(0m, summary.AmountPaid);
+        Assert.Equal(PaymentStatus.Cancelled, summary.Status);
+    }
+
+    [Fact]
+    public async Task PaymentSummary_LegacyRowWithoutTotal_FallsBackToTheAuthorizedAmount()
+    {
+        // Rows written before TotalAmount existed took the full-payment path, so the amount
+        // authorized was the full price. Falling back keeps their totals from reading as zero.
+        var payment = CreateAuthorizedPayment();
+        payment.Status = PaymentStatus.Completed;
+        payment.Amount = PackagePrice;
+        payment.TotalAmount = null;
+        payment.PaidAt = DateTimeOffset.UtcNow;
+
+        var summary = await GetPaymentSummaryAsync(payment);
+
+        Assert.NotNull(summary);
+        Assert.Equal(PackagePrice, summary!.TotalAmount);
+        Assert.Equal(0m, summary.RemainingAmount);
     }
 }
 
