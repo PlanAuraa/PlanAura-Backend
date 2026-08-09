@@ -5,6 +5,12 @@ namespace Planura.Core.Application.Services.Booking;
 
 public interface IBookingService
 {
+    /// <summary>
+    /// Prices a booking the client has configured but not yet submitted, so checkout can show the
+    /// total, the amount due now and the remaining balance before any contract is generated.
+    /// </summary>
+    Task<BookingPaymentQuoteDto> GetBookingPaymentQuoteAsync(long clientUserId, BookingPaymentQuoteRequestDto dto);
+
     Task<AgreementPreviewResultDto> PreviewBookingAgreementAsync(long clientUserId, AgreementPreviewRequestDto dto);
 
     /// <summary>The full-vs-deposit split for a chosen slot + package, computed server-side before payment so

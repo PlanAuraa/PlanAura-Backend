@@ -56,6 +56,12 @@ public class BookingRequestDto
     public DateTimeOffset? SlotStartAt { get; set; }
     public DateTimeOffset? SlotEndAt { get; set; }
 
+    /// <summary>
+    /// The real financial state of this booking: what was authorized, what has actually been captured,
+    /// and what is left. Null only if no payment row exists (a booking that never reached authorization).
+    /// </summary>
+    public BookingPaymentSummaryDto? Payment { get; set; }
+
     public long? ReviewId { get; set; }
     public int? ReviewRating { get; set; }
     public string? ReviewComment { get; set; }

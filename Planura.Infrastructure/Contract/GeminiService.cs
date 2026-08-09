@@ -137,7 +137,15 @@ namespace Planura.Infrastructure.Contract
             return new GeminiRequest(
                 SystemInstruction: new GeminiContent("model", new[] { new GeminiPart(request.SystemInstruction) }),
                 Contents: new[] { new GeminiContent("user", new[] { new GeminiPart(request.Prompt) }) },
-                GenerationConfig: new GeminiGenerationConfig(request.Temperature, request.TopP, request.MaxOutputTokens));
+                GenerationConfig: new GeminiGenerationConfig
+                {
+                    Temperature = request.Temperature,
+                    TopP = request.TopP,
+                    MaxOutputTokens = request.MaxOutputTokens,
+                    ResponseMimeType = request.ResponseMimeType,
+                    // Only meaningful alongside a JSON mime type; sending it otherwise is rejected.
+                    ResponseSchema = string.IsNullOrWhiteSpace(request.ResponseMimeType) ? null : request.ResponseSchema
+                });
         }
 
         // ---- Gemini v1beta generateContent request/response DTOs ----
@@ -153,10 +161,25 @@ namespace Planura.Infrastructure.Contract
 
         private record GeminiPart([property: JsonPropertyName("text")] string Text);
 
-        private record GeminiGenerationConfig(
-            [property: JsonPropertyName("temperature")] double Temperature,
-            [property: JsonPropertyName("topP")] double TopP,
-            [property: JsonPropertyName("maxOutputTokens")] int MaxOutputTokens);
+        private sealed class GeminiGenerationConfig
+        {
+            [JsonPropertyName("temperature")]
+            public double Temperature { get; init; }
+
+            [JsonPropertyName("topP")]
+            public double TopP { get; init; }
+
+            [JsonPropertyName("maxOutputTokens")]
+            public int MaxOutputTokens { get; init; }
+
+            [JsonPropertyName("responseMimeType")]
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public string? ResponseMimeType { get; init; }
+
+            [JsonPropertyName("responseSchema")]
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public object? ResponseSchema { get; init; }
+        }
 
         private record GeminiResponse(
             [property: JsonPropertyName("candidates")] IReadOnlyList<GeminiCandidate>? Candidates,

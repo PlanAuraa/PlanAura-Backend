@@ -27,6 +27,18 @@ public class BookingRequestsController : ControllerBase
         ?? throw new UnAuthorizedExeption("No authenticated user.");
 
     /// <summary>
+    /// Prices the booking the client has configured but not yet submitted: total, amount due now, and
+    /// remaining balance. Cheap and AI-free (unlike <see cref="PreviewAgreement"/>), so checkout can
+    /// show the real figures as soon as a slot is picked rather than waiting for a contract to be drafted.
+    /// </summary>
+    [HttpPost("payment-quote")]
+    public async Task<ActionResult<BookingPaymentQuoteDto>> GetPaymentQuote([FromBody] BookingPaymentQuoteRequestDto dto)
+    {
+        var result = await _bookingService.GetBookingPaymentQuoteAsync(CurrentUserId, dto);
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Generates the Booking Agreement for the current (fixed) payment-step details so the client can
     /// review it before confirming. Returns a token that <see cref="Create"/> redeems to bind that
     /// exact contract to the new booking.

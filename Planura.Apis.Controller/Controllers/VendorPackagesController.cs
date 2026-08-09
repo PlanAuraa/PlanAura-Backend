@@ -22,6 +22,10 @@ public class VendorPackagesController : ControllerBase
         _currentUserService = currentUserService;
     }
 
+    // Public marketplace reads — packages are shown on public vendor profiles /
+    // explore pages, so guests need to be able to list/search them without an
+    // account. Mutations below keep the ApprovedVendor policy unchanged.
+    [AllowAnonymous]
     [HttpGet]
     public async Task<ActionResult<IEnumerable<VendorPackageDto>>> GetAll([FromQuery] bool activeOnly = false)
     {
@@ -29,12 +33,14 @@ public class VendorPackagesController : ControllerBase
         return Ok(result);
     }
 
+    [AllowAnonymous]
     [HttpGet("{id:long}")]
     public async Task<ActionResult<VendorPackageDto>> GetById(long id)
     {
         return Ok(await _service.GetByIdAsync(id));
     }
 
+    [AllowAnonymous]
     [HttpGet("by-vendor/{vendorId:long}")]
     public async Task<ActionResult<IEnumerable<VendorPackageDto>>> GetByVendor(long vendorId, [FromQuery] bool activeOnly = false)
     {
@@ -42,6 +48,7 @@ public class VendorPackagesController : ControllerBase
         return Ok(result);
     }
 
+    [AllowAnonymous]
     [HttpGet("search")]
     public async Task<ActionResult<IEnumerable<VendorPackageDto>>> Search([FromQuery] VendorPackageSearchDto query)
     {
