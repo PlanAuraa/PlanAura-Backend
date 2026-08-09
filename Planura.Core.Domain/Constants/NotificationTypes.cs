@@ -29,4 +29,9 @@ public static class NotificationTypes
     public const string BookingCancellationRequested = "booking_cancellation_requested";
     public const string BookingCancellationApproved = "booking_cancellation_approved";
     public const string BookingCancellationRejected = "booking_cancellation_rejected";
+
+    // Deposit / partial-payment (Phase 3). Remainder charge outcomes and the grace-period lifecycle.
+    public const string RemainderPaid = "remainder_paid";
+    public const string RemainderFailed = "remainder_failed";
+    public const string RemainderPaymentReminder = "remainder_payment_reminder";
 }

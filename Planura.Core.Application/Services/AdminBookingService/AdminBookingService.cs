@@ -230,12 +230,14 @@ namespace Planura.Core.Application.Services.AdminBooking
 
             if (refundAmount > 0)
             {
+                // Refundable = Completed (full-payment) or FullyPaid (deposit whose remainder was collected).
+                // A deposit-only booking has no refundable payment here and is non-refundable by policy.
                 var payment = await _unitOfWork.Repository<Payment, long>()
-                    .GetWithSpecAsync(new CompletedPaymentByBookingRequestSpecification(bookingId));
+                    .GetWithSpecAsync(new RefundablePaymentByBookingRequestSpecification(bookingId));
                 if (payment is null)
                 {
                     throw new BadRequestExeption(
-                        "No captured payment was found for this booking; the cancellation cannot be approved.");
+                        "No refundable (fully-captured) payment was found for this booking; the cancellation cannot be approved.");
                 }
 
                 await _adminPaymentService.RefundPaymentAsync(payment.Id, adminId, new RefundPaymentDto
@@ -260,6 +262,16 @@ namespace Planura.Core.Application.Services.AdminBooking
             booking.CancellationReviewNotes = dto.Note;
             booking.CancellationReviewedAt = now;
             booking.RefundStatus = RefundStatus.Processed;
+            // Persist the ACTUAL refunded amount the admin decided (full or partial) back onto the booking,
+            // overwriting the estimate locked in at request time — otherwise an admin override (dto.Amount)
+            // would leave the client DTO showing the stale estimate. Percent is recomputed from the same
+            // captured basis the estimate used (AgreedPrice) so the two fields stay consistent; the client
+            // reads Percent >= 100 as a full refund.
+            booking.CancellationRefundAmount = refundAmount;
+            var capturedBasis = booking.AgreedPrice ?? 0m;
+            booking.CancellationRefundPercent = capturedBasis > 0m
+                ? Math.Round(refundAmount / capturedBasis * 100m, 2, MidpointRounding.AwayFromZero)
+                : 0m;
             booking.UpdatedAt = now;
 
             await _unitOfWork.BeginTransactionAsync();

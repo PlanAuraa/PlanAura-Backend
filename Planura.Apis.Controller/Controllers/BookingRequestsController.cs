@@ -50,6 +50,15 @@ public class BookingRequestsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>The full-vs-deposit payment breakdown for the chosen slot + package, so the client sees the
+    /// deposit / remainder / total before paying. Read-only — creates nothing.</summary>
+    [HttpPost("payment-preview")]
+    public async Task<ActionResult<PaymentPreviewDto>> PreviewPayment([FromBody] AgreementPreviewRequestDto dto)
+    {
+        var result = await _bookingService.PreviewPaymentAsync(CurrentUserId, dto);
+        return Ok(result);
+    }
+
     [HttpPost]
     public async Task<ActionResult<BookingRequestDto>> Create([FromBody] CreateBookingRequestDto dto)
     {
@@ -68,6 +77,18 @@ public class BookingRequestsController : ControllerBase
     public async Task<ActionResult<BookingRequestDto>> GetById(long id)
     {
         var result = await _bookingService.GetBookingRequestAsync(id, CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Client pays the outstanding remainder on their deposit booking on-session. If the response has
+    /// RequiresAction=true, the frontend completes authentication (SCA) using ClientSecret; otherwise the
+    /// booking is already fully paid.
+    /// </summary>
+    [HttpPost("{id:long}/pay-remainder")]
+    public async Task<ActionResult<PayRemainderResultDto>> PayRemainder(long id)
+    {
+        var result = await _bookingService.PayRemainderAsync(id, CurrentUserId);
         return Ok(result);
     }
 

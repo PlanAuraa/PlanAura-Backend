@@ -10,6 +10,7 @@ public class ClientConfiguration : IEntityTypeConfiguration<Client>
     {
         builder.Property(client => client.City).HasMaxLength(100);
         builder.Property(client => client.AvatarUrl).HasMaxLength(500);
+        builder.Property(client => client.StripeCustomerId).HasMaxLength(100);
         builder.Property(client => client.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
         builder.Property(client => client.UpdatedAt).HasDefaultValueSql("GETUTCDATE()");
 

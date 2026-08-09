@@ -16,6 +16,8 @@ using Planura.Core.Application.Services.Auth;
 using Planura.Core.Application.Services.Booking;
 using Planura.Core.Application.Services.BookingAutoCompleteJob;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
+using Planura.Core.Application.Services.RemainderChargeJob;
+using Planura.Core.Application.Services.RemainderGraceExpiryJob;
 using Planura.Core.Application.Services.CategoryService;
 using Planura.Core.Application.Services.Contract;
 using Planura.Core.Application.Services.Emails;
@@ -54,6 +56,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
         services.AddScoped<IBookingHoldExpiryJob, BookingHoldExpiryJob>();
         services.AddScoped<IBookingAutoCompleteJob, BookingAutoCompleteJob>();
+        services.AddScoped<IRemainderChargeJob, RemainderChargeJob>();
+        services.AddScoped<IRemainderGraceExpiryJob, RemainderGraceExpiryJob>();
         services.AddScoped<IAdminPaymentService, AdminPaymentService>();
         services.AddScoped<IAdminBookingService, AdminBookingService>();
         services.AddScoped<IAdminVendorService, AdminVendorService>();

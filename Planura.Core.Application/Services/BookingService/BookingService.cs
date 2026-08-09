@@ -152,6 +152,30 @@ public class BookingService : IBookingService
         };
     }
 
+    public async Task<PaymentPreviewDto> PreviewPaymentAsync(long clientUserId, AgreementPreviewRequestDto dto)
+    {
+        // Validate the same facts creation will (ownership, slot available, package, price = BasePrice) and
+        // run the identical full-vs-deposit decision, so the breakdown the client sees is exactly what will
+        // be charged. Read-only — creates no booking, holds no slot, authorizes nothing.
+        var facts = await ResolveBookingFactsAsync(
+            clientUserId, dto.EventPlanId, dto.AvailabilityId, dto.VendorPackageId, dto.GuestCount);
+
+        var eventDate = DateOnly.FromDateTime(facts.Slot.StartAt.UtcDateTime);
+        var plan = ResolvePaymentPlan(facts.AgreedPrice, eventDate);
+
+        return new PaymentPreviewDto
+        {
+            IsDeposit = plan.IsDeposit,
+            DepositAmount = plan.DepositAmount,
+            TotalAmount = plan.TotalAmount,
+            RemainderAmount = plan.IsDeposit ? plan.TotalAmount - plan.DepositAmount : 0m,
+            RemainderChargeDate = plan.IsDeposit
+                ? eventDate.AddDays(-_bookingOptions.RemainderChargeLeadDays)
+                : null,
+            Currency = _stripeOptions.DefaultCurrency
+        };
+    }
+
     public async Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto)
     {
         var facts = await ResolveBookingFactsAsync(
@@ -192,6 +216,26 @@ public class BookingService : IBookingService
         var eventDate = DateOnly.FromDateTime(slot.StartAt.UtcDateTime);
         var plan = ResolvePaymentPlan(agreedPrice, eventDate);
 
+        // Deposit path (Phase 2): ensure the client has a Stripe Customer so the card can be saved and
+        // charged off-session for the remainder later. Created lazily on the first deposit booking and
+        // reused thereafter. A newly created id is persisted onto the client inside the transaction below,
+        // so a customer created here but then abandoned (declined auth / rolled-back write) is at worst a
+        // harmless unused Stripe Customer. The full-payment path never needs this.
+        string? customerId = plan.IsDeposit ? facts.Client.StripeCustomerId : null;
+        var createdNewCustomer = false;
+        if (plan.IsDeposit && string.IsNullOrWhiteSpace(customerId))
+        {
+            var clientUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(facts.Client.UserId);
+            customerId = await _paymentGatewayService.CreateCustomerAsync(new CreateCustomerRequest
+            {
+                Email = clientUser?.Email,
+                Name = clientUser?.FullName,
+                IdempotencyKey = $"customer-client-{facts.Client.Id}",
+                Metadata = new Dictionary<string, string> { ["client_id"] = facts.Client.Id.ToString() }
+            });
+            createdNewCustomer = true;
+        }
+
         // Authorize the card hold before touching the database: if this fails (declined, insufficient
         // funds, etc.) no booking request or payment row is ever created — see the option (b) status
         // model discussion. The only failure window left is between this call succeeding and the
@@ -202,6 +246,9 @@ public class BookingService : IBookingService
             Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
             PaymentMethodId = dto.PaymentMethodId,
             IdempotencyKey = dto.RequestId,
+            // Deposit path attaches to the Customer and saves the card off-session; full path does neither.
+            CustomerId = customerId,
+            SaveCardForOffSession = plan.IsDeposit,
             Metadata = new Dictionary<string, string>
             {
                 ["client_id"] = facts.Client.Id.ToString(),
@@ -249,6 +296,8 @@ public class BookingService : IBookingService
             TotalAmount = plan.TotalAmount,
             Status = plan.IsDeposit ? PaymentStatus.DepositAuthorized : PaymentStatus.Authorized,
             PaymentMethod = dto.PaymentMethodId,
+            // Deposit path saves the card for the later off-session remainder charge; full path leaves this null.
+            SavedPaymentMethodId = plan.IsDeposit ? dto.PaymentMethodId : null,
             GatewayReference = intentResult.PaymentIntentId,
             AuthorizedAt = DateTimeOffset.UtcNow,
             BookingRequest = booking
@@ -259,6 +308,15 @@ public class BookingService : IBookingService
         {
             await _unitOfWork.Repository<BookingRequest, long>().AddAsync(booking);
             await _unitOfWork.Repository<Payment, long>().AddAsync(payment);
+
+            // Persist a newly created Stripe Customer id onto the client so it's reused on future deposit
+            // bookings (and available to the remainder-charge job). Only when we created one this call.
+            if (createdNewCustomer)
+            {
+                facts.Client.StripeCustomerId = customerId;
+                facts.Client.UpdatedAt = DateTimeOffset.UtcNow;
+                _unitOfWork.Repository<Client, long>().Update(facts.Client);
+            }
 
             slot.Status = AvailabilityStatus.Held;
             slot.HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(_bookingOptions.HoldTtlHours);
@@ -504,6 +562,20 @@ public class BookingService : IBookingService
                 $"Cannot quote a cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
         }
 
+        var quotePayment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+        if (IsDepositOnly(quotePayment))
+        {
+            // Deposit-only booking (remainder not paid): cancelling forfeits the deposit — non-refundable.
+            var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+            return new CancellationQuoteDto
+            {
+                DaysUntilEvent = booking.EventDate.DayNumber - today.DayNumber,
+                RefundPercent = 0m,
+                RefundAmount = 0m
+            };
+        }
+
         var (percent, amount, daysUntilEvent) = ResolveCancellationRefund(booking);
         return new CancellationQuoteDto
         {
@@ -512,6 +584,17 @@ public class BookingService : IBookingService
             RefundAmount = amount
         };
     }
+
+    /// <summary>
+    /// A deposit-path booking whose remainder has NOT been collected (still owing it — DepositPaid_RemainderDue
+    /// or RemainderFailed). Cancelling such a booking forfeits the deposit: immediate cancel, slot released, no
+    /// refund and no admin review — mirroring the grace-expiry job's forfeit outcome. A fully-paid deposit
+    /// (FullyPaid) and a full-payment booking (Completed) are NOT deposit-only and keep the admin-review path.
+    /// </summary>
+    private static bool IsDepositOnly(Payment? payment) =>
+        payment is not null
+        && payment.IsDeposit
+        && payment.Status is PaymentStatus.DepositPaid_RemainderDue or PaymentStatus.RemainderFailed;
 
     /// <summary>
     /// The client requests cancellation of an Accepted booking. This does NOT cancel the booking,
@@ -543,6 +626,23 @@ public class BookingService : IBookingService
                 $"Cannot request cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
         }
 
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+
+        // A remainder charge is mid-flight (e.g. the client is completing SCA) — don't cancel underneath it.
+        if (payment is not null && payment.IsDeposit && payment.Status == PaymentStatus.RemainderCharging)
+        {
+            throw new BadRequestExeption(
+                "A payment for the remaining balance is being processed. Please wait a moment before cancelling.");
+        }
+
+        // Deposit-only (remainder unpaid): forfeit the deposit and cancel immediately — no admin review.
+        if (IsDepositOnly(payment))
+        {
+            return await CancelDepositOnlyImmediatelyAsync(booking, clientUserId, reason);
+        }
+
+        // Fully-paid deposit (FullyPaid) and full-payment (Completed) bookings: unchanged admin-review path.
         var (percent, amount, _) = ResolveCancellationRefund(booking);
 
         var now = DateTimeOffset.UtcNow;
@@ -596,6 +696,77 @@ public class BookingService : IBookingService
                 "Client requested a cancellation",
                 $"The client requested to cancel the booking for {booking.EventDate:d}. " +
                 "Your slot stays reserved until an admin reviews the request."));
+        }
+
+        return await MapBookingWithSlotAsync(booking);
+    }
+
+    /// <summary>
+    /// Deposit-only cancellation: the client cancels a booking whose remainder was never paid. The deposit is
+    /// forfeited (kept — no Stripe refund), the booking is cancelled immediately and the vendor's slot is
+    /// released, with NO admin review entry. This mirrors the grace-expiry job's forfeit outcome, just
+    /// client-initiated and resolved at once. Both background jobs skip it afterwards (they select on
+    /// Status == Accepted, and this booking is now Cancelled).
+    /// </summary>
+    private async Task<BookingRequestDto> CancelDepositOnlyImmediatelyAsync(BookingRequest booking, long clientUserId, string reason)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var previousStatus = booking.Status;
+        booking.Status = BookingStatus.Cancelled;
+        booking.CancelledAt = now;
+        booking.CancellationReason = reason;
+        booking.CancellationRequestedAt = now;
+        booking.CancellationReviewedAt = now;      // resolved immediately — there is no admin step
+        booking.CancellationRefundPercent = 0m;
+        booking.CancellationRefundAmount = 0m;
+        booking.RefundStatus = RefundStatus.None;  // deposit forfeited — nothing is refunded
+        booking.UpdatedAt = now;
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(booking.Id));
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Cancelled.ToString(),
+                ChangedByUserId = clientUserId,
+                Notes = "Cancelled by client; remaining balance unpaid, so the deposit is forfeited (non-refundable)."
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        // No admin notification — there is no review. Just let the vendor know the slot is free again.
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.BookingCancelled,
+                "Booking cancelled",
+                $"The client cancelled their booking for {booking.EventDate:d}. Your slot is available again."));
         }
 
         return await MapBookingWithSlotAsync(booking);
@@ -933,6 +1104,227 @@ public class BookingService : IBookingService
         }
 
         return MapBooking(booking);
+    }
+
+    /// <summary>
+    /// Client pays the outstanding remainder on their deposit booking on-session (Phase 3). Eligible from
+    /// DepositPaid_RemainderDue (before the auto-charge job runs) or RemainderFailed (after a failed
+    /// auto-charge). Shares the background job's no-double-charge guard via an atomic claim: exactly one of
+    /// {this call, the job} ever transitions the payment into RemainderCharging and charges it. Supports SCA
+    /// — on requires_action the frontend completes authentication and the webhook finalizes the payment.
+    /// </summary>
+    public async Task<PayRemainderResultDto> PayRemainderAsync(long bookingRequestId, long clientUserId)
+    {
+        var client = await _unitOfWork.Repository<Client, long>()
+            .GetWithSpecAsync(new ClientByUserIdSpecification(clientUserId));
+        if (client is null)
+        {
+            throw new NotFoundExeption(nameof(Client), clientUserId);
+        }
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(bookingRequestId);
+        if (booking is null || booking.ClientId != client.Id)
+        {
+            // Ownership failures surface as NotFound so a client can't probe others' booking ids.
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+        if (payment is null || !payment.IsDeposit)
+        {
+            // Full-payment-path bookings have no remainder to pay.
+            throw new BadRequestExeption("This booking has no remaining balance to pay — it was paid in full up front.");
+        }
+
+        if (payment.Status is not (PaymentStatus.DepositPaid_RemainderDue or PaymentStatus.RemainderFailed))
+        {
+            throw new BadRequestExeption(
+                $"The remaining balance can't be paid from the current payment state ('{payment.Status}').");
+        }
+
+        if (string.IsNullOrWhiteSpace(payment.SavedPaymentMethodId) || string.IsNullOrWhiteSpace(client.StripeCustomerId))
+        {
+            throw new BadRequestExeption("No saved card is on file for this booking, so the remaining balance can't be charged.");
+        }
+
+        var remainder = (payment.TotalAmount ?? 0m) - (payment.DepositAmount ?? 0m);
+        if (remainder <= 0m)
+        {
+            throw new BadRequestExeption("There is no remaining balance to charge on this booking.");
+        }
+
+        // Atomic claim shared with the background remainder-charge job (see IUnitOfWork.TryClaimRemainderChargeAsync).
+        // If we can't claim, the job is charging it right now, an earlier SCA attempt is still in flight, or it
+        // was just paid — in every case we must NOT charge again.
+        var claimed = await _unitOfWork.TryClaimRemainderChargeAsync(payment.Id);
+        if (!claimed)
+        {
+            throw new BadRequestExeption(
+                "A payment for the remaining balance is already being processed for this booking. Please wait a moment and refresh.");
+        }
+        // Reflect the claim on the tracked entity so later Update()s don't null out what the claim UPDATE set.
+        payment.Status = PaymentStatus.RemainderCharging;
+        payment.RemainderChargingSince = DateTimeOffset.UtcNow;
+
+        PaymentIntentResult result;
+        try
+        {
+            result = await _paymentGatewayService.ChargeOnSessionAsync(new ChargeOnSessionRequest
+            {
+                AmountInSmallestUnit = StripeAmountConverter.ToSmallestUnit(remainder),
+                Currency = _stripeOptions.DefaultCurrency.ToLowerInvariant(),
+                CustomerId = client.StripeCustomerId!,
+                PaymentMethodId = payment.SavedPaymentMethodId!,
+                // Distinct from the job's off-session key; the claim (not the key) is the cross-actor guard.
+                IdempotencyKey = $"remainder-onsession-{payment.Id}",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["booking_id"] = booking.Id.ToString(),
+                    ["payment_id"] = payment.Id.ToString(),
+                    ["kind"] = "remainder",
+                    ["channel"] = "on_session"
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // Hard decline: release the claim into RemainderFailed (grace clock starts) and surface the error.
+            await MarkRemainderFailedFromClaimAsync(booking, payment, "The on-session remainder payment was declined.");
+            throw;
+        }
+
+        if (result.Status == "succeeded")
+        {
+            await RecordRemainderPaidFromClaimAsync(booking, payment, result.PaymentIntentId, remainder);
+            await NotifyRemainderFullyPaidBestEffortAsync(booking, client.UserId);
+            return new PayRemainderResultDto
+            {
+                Status = result.Status,
+                PaymentIntentId = result.PaymentIntentId,
+                RequiresAction = false
+            };
+        }
+
+        // SCA required: store the remainder PI id so the webhook can finalize once the client authenticates
+        // in the browser; the payment stays RemainderCharging until then.
+        await StoreRemainderPendingActionAsync(payment, result.PaymentIntentId);
+        return new PayRemainderResultDto
+        {
+            Status = result.Status,
+            PaymentIntentId = result.PaymentIntentId,
+            ClientSecret = result.ClientSecret,
+            RequiresAction = true
+        };
+    }
+
+    private async Task RecordRemainderPaidFromClaimAsync(BookingRequest booking, Payment payment, string gatewayReference, decimal remainder)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            payment.Status = PaymentStatus.FullyPaid;
+            payment.RemainderGatewayReference = gatewayReference;
+            payment.RemainderChargedAt = now;
+            payment.RemainderFailedAt = null;       // ends the grace window
+            payment.RemainderFailureReason = null;
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+
+            booking.PaymentStatus = BookingPaymentStatus.Paid;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = booking.Status.ToString(),
+                NewStatus = booking.Status.ToString(),
+                ChangedByUserId = booking.Client?.UserId,
+                Notes = $"remaining balance paid by client on-session ({remainder:0.00}); booking is now fully paid"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogCritical(ex,
+                "REMAINDER RECONCILIATION NEEDED: on-session charge {GatewayReference} for booking {BookingId} / " +
+                "payment {PaymentId} succeeded at Stripe but recording FullyPaid failed and rolled back. " +
+                "The payment stays RemainderCharging; verify the payment_intent.succeeded webhook reconciles it.",
+                gatewayReference, booking.Id, payment.Id);
+            throw;
+        }
+    }
+
+    private async Task MarkRemainderFailedFromClaimAsync(BookingRequest booking, Payment payment, string reason)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            payment.Status = PaymentStatus.RemainderFailed;
+            payment.RemainderFailureReason = reason.Length > 500 ? reason[..500] : reason;
+            payment.RemainderFailedAt = now; // (re)start the grace clock
+            _unitOfWork.Repository<Payment, long>().Update(payment);
+
+            booking.PaymentStatus = BookingPaymentStatus.RemainderFailed;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = booking.Status.ToString(),
+                NewStatus = booking.Status.ToString(),
+                ChangedByUserId = booking.Client?.UserId,
+                Notes = "on-session remainder payment was declined; booking is awaiting resolution"
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogError(ex,
+                "Failed to record RemainderFailed after a declined on-session payment for booking {BookingId} / payment {PaymentId}.",
+                booking.Id, payment.Id);
+        }
+    }
+
+    /// <summary>SCA path: persist the remainder PI id (so the webhook can match it later) while the payment
+    /// stays RemainderCharging awaiting the client's browser-side authentication.</summary>
+    private async Task StoreRemainderPendingActionAsync(Payment payment, string gatewayReference)
+    {
+        payment.RemainderGatewayReference = gatewayReference;
+        _unitOfWork.Repository<Payment, long>().Update(payment);
+        await _unitOfWork.SaveChangesAsync();
+    }
+
+    private async Task NotifyRemainderFullyPaidBestEffortAsync(BookingRequest booking, long clientUserId)
+    {
+        await NotifyBestEffortAsync(() => _notificationService.NotifyUserWithEmailAsync(
+            clientUserId,
+            NotificationTypes.RemainderPaid,
+            "Your booking is now fully paid",
+            $"Your payment for the remaining balance on your booking for {booking.EventDate:d} was successful. " +
+            "Your booking is fully paid.",
+            emailSubject: "Your booking is fully paid",
+            emailBody: $"Your payment for the remaining balance on your booking for {booking.EventDate:d} was successful. " +
+                       "Your booking is now paid in full — thank you."));
+
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.PaymentReceived,
+                "Remaining balance received",
+                $"The remaining balance for the booking on {booking.EventDate:d} has been received."));
+        }
     }
 
     /// <summary>
@@ -1328,6 +1720,16 @@ public class BookingService : IBookingService
         var dto = _mapper.Map<BookingRequestDto>(booking);
         dto.ContractDocumentUrl = _attachmentService.ToAbsoluteUrl(dto.ContractDocumentUrl);
         dto.ClientName = booking.Client?.User?.FullName;
+
+        // Surface the deposit split (when the Payments were loaded — client list/detail specs Include them)
+        // so the cancel warning can show the exact forfeited deposit. Full-payment bookings have no deposit.
+        var depositPayment = booking.Payments?.FirstOrDefault(payment => payment.IsDeposit);
+        if (depositPayment is not null)
+        {
+            dto.IsDeposit = true;
+            dto.DepositAmount = depositPayment.DepositAmount;
+            dto.TotalAmount = depositPayment.TotalAmount;
+        }
 
         // Relies on the linked VendorAvailability being loaded — either via an explicit Include on the
         // spec that fetched `booking` (BookingRequestByIdSpecification / By-Client / By-Vendor), or

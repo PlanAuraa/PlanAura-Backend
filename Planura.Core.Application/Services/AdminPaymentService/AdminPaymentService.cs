@@ -130,10 +130,13 @@ namespace Planura.Core.Application.Services.AdminPayment
                 throw new NotFoundExeption(nameof(Payment), paymentId);
             }
 
-            if (payment.Status != PaymentStatus.Completed)
+            // Refundable = a fully-captured payment: Completed (full-payment path) or FullyPaid (deposit path
+            // whose remainder was collected). Deposit-only states (DepositPaid_RemainderDue / RemainderFailed /
+            // RemainderCharging) are not refundable — a deposit-only cancellation is non-refundable by policy.
+            if (payment.Status is not (PaymentStatus.Completed or PaymentStatus.FullyPaid))
             {
                 throw new BadRequestExeption(
-                    $"Only a Completed payment can be refunded (current status: '{payment.Status}').");
+                    $"Only a fully-captured payment (Completed or FullyPaid) can be refunded (current status: '{payment.Status}').");
             }
 
             if (string.IsNullOrWhiteSpace(payment.GatewayReference))
@@ -141,17 +144,27 @@ namespace Planura.Core.Application.Services.AdminPayment
                 throw new BadRequestExeption("This payment has no gateway reference and cannot be refunded through Stripe.");
             }
 
-            long? amountInSmallestUnit = dto.Amount is null
-                ? null
-                : StripeAmountConverter.ToSmallestUnit(dto.Amount.Value);
-
-            await _paymentGatewayService.RefundPaymentIntentAsync(new RefundPaymentIntentRequest
+            if (payment.Status == PaymentStatus.FullyPaid)
             {
-                PaymentIntentId = payment.GatewayReference!,
-                IdempotencyKey = $"admin-refund-{payment.Id}-{DateTimeOffset.UtcNow.Ticks}",
-                AmountInSmallestUnit = amountInSmallestUnit,
-                Reason = "requested_by_customer"
-            });
+                // Deposit path: the total was captured across TWO PaymentIntents (the deposit PI and the
+                // remainder PI), so the refund must hit both. Basis is the amount actually captured.
+                await RefundFullyPaidDepositAsync(payment, dto.Amount);
+            }
+            else
+            {
+                // Full-payment path: a single captured PaymentIntent — unchanged behavior.
+                long? amountInSmallestUnit = dto.Amount is null
+                    ? null
+                    : StripeAmountConverter.ToSmallestUnit(dto.Amount.Value);
+
+                await _paymentGatewayService.RefundPaymentIntentAsync(new RefundPaymentIntentRequest
+                {
+                    PaymentIntentId = payment.GatewayReference!,
+                    IdempotencyKey = $"admin-refund-{payment.Id}-{DateTimeOffset.UtcNow.Ticks}",
+                    AmountInSmallestUnit = amountInSmallestUnit,
+                    Reason = "requested_by_customer"
+                });
+            }
 
             // The domain's PaymentStatus enum has no "PartiallyRefunded" state, so - like the existing
             // charge.refunded webhook handler - a refund of any size marks the payment Refunded locally.
@@ -190,6 +203,54 @@ namespace Planura.Core.Application.Services.AdminPayment
                 RefundedAt = payment.RefundedAt,
                 CreatedAt = payment.CreatedAt
             };
+        }
+
+        /// <summary>
+        /// Refunds a fully-paid deposit booking across its two PaymentIntents. A full refund (null amount)
+        /// refunds each PI in full; a partial amount is allocated deposit-PI-first, then the remainder PI, so
+        /// the total refunded matches the requested amount (capped at the amount actually captured).
+        /// </summary>
+        private async Task RefundFullyPaidDepositAsync(Payment payment, decimal? requestedAmount)
+        {
+            var depositCaptured = payment.DepositAmount ?? payment.Amount;
+            var remainderCaptured = (payment.TotalAmount ?? depositCaptured) - depositCaptured;
+
+            decimal depositPortion;
+            decimal remainderPortion;
+            if (requestedAmount is null)
+            {
+                depositPortion = depositCaptured;
+                remainderPortion = remainderCaptured;
+            }
+            else
+            {
+                var amount = Math.Min(requestedAmount.Value, depositCaptured + remainderCaptured);
+                depositPortion = Math.Min(amount, depositCaptured);
+                remainderPortion = amount - depositPortion;
+            }
+
+            if (depositPortion > 0m)
+            {
+                await _paymentGatewayService.RefundPaymentIntentAsync(new RefundPaymentIntentRequest
+                {
+                    PaymentIntentId = payment.GatewayReference!,
+                    IdempotencyKey = $"admin-refund-{payment.Id}-deposit-{DateTimeOffset.UtcNow.Ticks}",
+                    // null amount => Stripe refunds this PI in full.
+                    AmountInSmallestUnit = requestedAmount is null ? null : StripeAmountConverter.ToSmallestUnit(depositPortion),
+                    Reason = "requested_by_customer"
+                });
+            }
+
+            if (remainderPortion > 0m && !string.IsNullOrWhiteSpace(payment.RemainderGatewayReference))
+            {
+                await _paymentGatewayService.RefundPaymentIntentAsync(new RefundPaymentIntentRequest
+                {
+                    PaymentIntentId = payment.RemainderGatewayReference!,
+                    IdempotencyKey = $"admin-refund-{payment.Id}-remainder-{DateTimeOffset.UtcNow.Ticks}",
+                    AmountInSmallestUnit = requestedAmount is null ? null : StripeAmountConverter.ToSmallestUnit(remainderPortion),
+                    Reason = "requested_by_customer"
+                });
+            }
         }
     }
 }
