@@ -107,7 +107,9 @@ public class RemainderChargeJob : IRemainderChargeJob
                 booking.Id, payment.Id);
             return;
         }
-        payment.Status = PaymentStatus.RemainderCharging; // reflect the claim on the tracked entity
+        // Reflect the claim on the tracked entity so later Update()s don't null out what the claim UPDATE set.
+        payment.Status = PaymentStatus.RemainderCharging;
+        payment.RemainderChargingSince = now;
 
         try
         {

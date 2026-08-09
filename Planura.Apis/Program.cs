@@ -75,6 +75,7 @@ builder.Services.AddHangfire(config => config
     .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddHangfireServer();
 builder.Services.AddScoped<RemainderChargeJobRunner>();
+builder.Services.AddScoped<RemainderGraceExpiryJobRunner>();
 
 var app = builder.Build();
 
@@ -103,6 +104,13 @@ using (var scope = app.Services.CreateScope())
         "deposit-remainder-charge",
         runner => runner.RunAsync(),
         "0 * * * *");
+
+    // Deposit remainder grace expiry (Phase 3): routes unpaid-past-grace bookings to admin cancellation
+    // review and reclaims stuck RemainderCharging claims. Hourly, single-instance.
+    recurringJobs.AddOrUpdate<RemainderGraceExpiryJobRunner>(
+        "deposit-remainder-grace-expiry",
+        runner => runner.RunAsync(),
+        "30 * * * *");
 }
 
 

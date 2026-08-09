@@ -22,4 +22,11 @@ public interface IUnitOfWork : IDisposable, IAsyncDisposable
     /// visible to the other actor.
     /// </summary>
     Task<bool> TryClaimRemainderChargeAsync(long paymentId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically reclaims a payment stuck in RemainderCharging (e.g. an abandoned on-session SCA) back to
+    /// RemainderFailed. Returns true only if the row was still RemainderCharging — so it can never overwrite
+    /// a payment that a webhook or the synchronous path already resolved.
+    /// </summary>
+    Task<bool> TryReclaimStuckRemainderChargeAsync(long paymentId, string reason, CancellationToken cancellationToken = default);
 }

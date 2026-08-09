@@ -977,7 +977,9 @@ public class BookingService : IBookingService
             throw new BadRequestExeption(
                 "A payment for the remaining balance is already being processed for this booking. Please wait a moment and refresh.");
         }
-        payment.Status = PaymentStatus.RemainderCharging; // reflect the claim on the tracked entity
+        // Reflect the claim on the tracked entity so later Update()s don't null out what the claim UPDATE set.
+        payment.Status = PaymentStatus.RemainderCharging;
+        payment.RemainderChargingSince = DateTimeOffset.UtcNow;
 
         PaymentIntentResult result;
         try

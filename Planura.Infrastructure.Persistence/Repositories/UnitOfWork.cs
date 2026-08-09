@@ -99,7 +99,27 @@ public class UnitOfWork : IUnitOfWork
                 && (payment.Status == PaymentStatus.DepositPaid_RemainderDue
                     || payment.Status == PaymentStatus.RemainderFailed))
             .ExecuteUpdateAsync(
-                setters => setters.SetProperty(payment => payment.Status, PaymentStatus.RemainderCharging),
+                setters => setters
+                    .SetProperty(payment => payment.Status, PaymentStatus.RemainderCharging)
+                    .SetProperty(payment => payment.RemainderChargingSince, DateTimeOffset.UtcNow),
+                cancellationToken);
+
+        return rowsAffected == 1;
+    }
+
+    public async Task<bool> TryReclaimStuckRemainderChargeAsync(long paymentId, string reason, CancellationToken cancellationToken = default)
+    {
+        // Atomic reverse of the claim: only reclaims a payment still stuck in RemainderCharging back to
+        // RemainderFailed. If a webhook/synchronous path already resolved it (FullyPaid/RemainderFailed),
+        // this affects 0 rows and does nothing — so it can't clobber a payment that just completed.
+        var rowsAffected = await _dbContext.Set<Payment>()
+            .Where(payment => payment.Id == paymentId && payment.Status == PaymentStatus.RemainderCharging)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(payment => payment.Status, PaymentStatus.RemainderFailed)
+                    .SetProperty(payment => payment.RemainderFailedAt, DateTimeOffset.UtcNow)
+                    .SetProperty(payment => payment.RemainderChargingSince, (DateTimeOffset?)null)
+                    .SetProperty(payment => payment.RemainderFailureReason, reason),
                 cancellationToken);
 
         return rowsAffected == 1;
