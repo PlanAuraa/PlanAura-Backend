@@ -105,6 +105,30 @@ public class BookingService : IBookingService
         };
     }
 
+    public async Task<PaymentPreviewDto> PreviewPaymentAsync(long clientUserId, AgreementPreviewRequestDto dto)
+    {
+        // Validate the same facts creation will (ownership, slot available, package, price = BasePrice) and
+        // run the identical full-vs-deposit decision, so the breakdown the client sees is exactly what will
+        // be charged. Read-only — creates no booking, holds no slot, authorizes nothing.
+        var facts = await ResolveBookingFactsAsync(
+            clientUserId, dto.EventPlanId, dto.AvailabilityId, dto.VendorPackageId, dto.GuestCount);
+
+        var eventDate = DateOnly.FromDateTime(facts.Slot.StartAt.UtcDateTime);
+        var plan = ResolvePaymentPlan(facts.AgreedPrice, eventDate);
+
+        return new PaymentPreviewDto
+        {
+            IsDeposit = plan.IsDeposit,
+            DepositAmount = plan.DepositAmount,
+            TotalAmount = plan.TotalAmount,
+            RemainderAmount = plan.IsDeposit ? plan.TotalAmount - plan.DepositAmount : 0m,
+            RemainderChargeDate = plan.IsDeposit
+                ? eventDate.AddDays(-_bookingOptions.RemainderChargeLeadDays)
+                : null,
+            Currency = _stripeOptions.DefaultCurrency
+        };
+    }
+
     public async Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto)
     {
         var facts = await ResolveBookingFactsAsync(

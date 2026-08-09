@@ -38,6 +38,15 @@ public class BookingRequestsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>The full-vs-deposit payment breakdown for the chosen slot + package, so the client sees the
+    /// deposit / remainder / total before paying. Read-only — creates nothing.</summary>
+    [HttpPost("payment-preview")]
+    public async Task<ActionResult<PaymentPreviewDto>> PreviewPayment([FromBody] AgreementPreviewRequestDto dto)
+    {
+        var result = await _bookingService.PreviewPaymentAsync(CurrentUserId, dto);
+        return Ok(result);
+    }
+
     [HttpPost]
     public async Task<ActionResult<BookingRequestDto>> Create([FromBody] CreateBookingRequestDto dto)
     {

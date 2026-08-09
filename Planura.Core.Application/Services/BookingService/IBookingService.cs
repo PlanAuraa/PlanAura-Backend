@@ -6,6 +6,10 @@ namespace Planura.Core.Application.Services.Booking;
 public interface IBookingService
 {
     Task<AgreementPreviewResultDto> PreviewBookingAgreementAsync(long clientUserId, AgreementPreviewRequestDto dto);
+
+    /// <summary>The full-vs-deposit split for a chosen slot + package, computed server-side before payment so
+    /// the client can see the deposit breakdown (deposit now, remainder auto-charged, total). Read-only.</summary>
+    Task<PaymentPreviewDto> PreviewPaymentAsync(long clientUserId, AgreementPreviewRequestDto dto);
     Task<BookingRequestDto> CreateBookingRequestAsync(long clientUserId, CreateBookingRequestDto dto);
     Task<BookingRequestDto> CancelBookingRequestAsync(long bookingRequestId, long clientUserId);
     Task<BookingRequestDto> ConfirmServiceDeliveredAsync(long bookingRequestId, long clientUserId);

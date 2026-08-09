@@ -704,6 +704,57 @@ public class BookingServiceTests
         Assert.Equal(PackagePrice, payment.Amount);
     }
 
+    // ---------------- PreviewPaymentAsync: pre-payment deposit breakdown (Phase 4) ----------------
+
+    private void SetupPreviewFacts(VendorAvailability slot)
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>())).ReturnsAsync(slot);
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+        SetupPackageRepo();
+    }
+
+    private static AgreementPreviewRequestDto PreviewDto() => new()
+    {
+        EventPlanId = EventPlanId,
+        AvailabilityId = AvailabilityId,
+        VendorPackageId = PackageId
+    };
+
+    [Fact]
+    public async Task PreviewPaymentAsync_EventBeyondThreshold_ReturnsDepositBreakdown()
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(60);
+        SetupPreviewFacts(CreateSlot(startAt: start));
+
+        var preview = await CreateService().PreviewPaymentAsync(ClientUserId, PreviewDto());
+
+        Assert.True(preview.IsDeposit);
+        Assert.Equal(1000m, preview.DepositAmount);   // 20% of 5000
+        Assert.Equal(PackagePrice, preview.TotalAmount);
+        Assert.Equal(4000m, preview.RemainderAmount); // 5000 - 1000
+        var eventDate = DateOnly.FromDateTime(start.UtcDateTime);
+        Assert.Equal(eventDate.AddDays(-4), preview.RemainderChargeDate); // RemainderChargeLeadDays default 4
+        Assert.Equal("EGP", preview.Currency);
+    }
+
+    [Fact]
+    public async Task PreviewPaymentAsync_EventWithinThreshold_ReturnsFullPaymentNoRemainder()
+    {
+        SetupPreviewFacts(CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3)));
+
+        var preview = await CreateService().PreviewPaymentAsync(ClientUserId, PreviewDto());
+
+        Assert.False(preview.IsDeposit);
+        Assert.Equal(PackagePrice, preview.TotalAmount);
+        Assert.Equal(0m, preview.RemainderAmount);
+        Assert.Null(preview.RemainderChargeDate);
+    }
+
     // ---------------- CreateBookingRequestAsync: save card on deposit path (Phase 2, Section A) ----------------
 
     [Fact]
