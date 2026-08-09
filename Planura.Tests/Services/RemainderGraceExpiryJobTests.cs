@@ -128,6 +128,20 @@ public class RemainderGraceExpiryJobTests
     }
 
     [Fact]
+    public async Task RunAsync_BookingAlreadyCancelled_Skips()
+    {
+        // No double-handling: a booking the client already manually forfeit-cancelled (now Cancelled) must be
+        // skipped by the grace-expiry job even though its payment is still grace-expired RemainderFailed.
+        SetupPaymentSpecs(graceExpired: new List<Payment> { CreateRemainderFailedPayment() });
+        var booking = CreateBooking(status: BookingStatus.Cancelled, paymentStatus: BookingPaymentStatus.RemainderFailed);
+        SetupBookingRepo(booking);
+
+        await CreateJob().RunAsync();
+
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RunAsync_StuckChargingPastTimeout_ReclaimedToRemainderFailed()
     {
         var stuck = new Payment

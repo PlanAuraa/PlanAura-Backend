@@ -1112,6 +1112,140 @@ public class BookingServiceTests
         Assert.Equal(BookingStatus.Cancelled, result.Status);
     }
 
+    // ---------------- RequestCancellationAsync: deposit-aware manual cancel (Phase 3, Section G) ----------------
+
+    private (BookingRequest Booking, VendorAvailability Hold) SetupRequestCancellation(Payment payment)
+    {
+        SetupClientRepo(CreateClient());
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.PaymentStatus = BookingPaymentStatus.DepositPaid;
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var hold = CreateSlot(status: AvailabilityStatus.Booked);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        return (booking, hold);
+    }
+
+    private static Payment DepositPayment(PaymentStatus status) => new()
+    {
+        Id = 1,
+        BookingRequestId = 1,
+        ClientId = ClientId,
+        VendorId = VendorId,
+        IsDeposit = true,
+        DepositAmount = 1000m,
+        TotalAmount = PackagePrice,
+        Status = status
+    };
+
+    [Fact]
+    public async Task RequestCancellationAsync_DepositOnlyRemainderDue_ImmediateForfeitCancelReleasesSlotNoAdmin()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.DepositPaid_RemainderDue));
+
+        var result = await CreateService().RequestCancellationAsync(1, ClientUserId, "changed my mind");
+
+        // Immediate cancel + slot released + deposit forfeited (no refund), NO admin review.
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.NotNull(booking.CancelledAt);
+        Assert.Equal(RefundStatus.None, booking.RefundStatus);
+        Assert.Equal(0m, booking.CancellationRefundAmount);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // No admin review entry, no Stripe refund.
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+        _paymentGatewayServiceMock.Verify(g => g.RefundPaymentIntentAsync(It.IsAny<RefundPaymentIntentRequest>()), Times.Never);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_RemainderFailed_ImmediateForfeitCancel()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.RemainderFailed));
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "no longer needed");
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Equal(RefundStatus.None, booking.RefundStatus);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_FullyPaidDeposit_GoesToAdminReview()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.FullyPaid));
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please");
+
+        // Unchanged admin-review path: request only — not cancelled, slot NOT released, admin notified.
+        Assert.Equal(BookingStatus.CancellationRequested, booking.Status);
+        Assert.Equal(RefundStatus.PendingReview, booking.RefundStatus);
+        Assert.Equal(AvailabilityStatus.Booked, hold.Status); // slot untouched, awaits admin
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, NotificationTypes.BookingCancellationRequested, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_FullPaymentPath_GoesToAdminReview()
+    {
+        // Full-payment booking: no deposit payment on file (IsDeposit=false / not found) -> review path.
+        var completed = DepositPayment(PaymentStatus.Completed);
+        completed.IsDeposit = false;
+        var (booking, _) = SetupRequestCancellation(completed);
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please");
+
+        Assert.Equal(BookingStatus.CancellationRequested, booking.Status);
+        Assert.Equal(RefundStatus.PendingReview, booking.RefundStatus);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_RemainderCharging_Rejected()
+    {
+        SetupRequestCancellation(DepositPayment(PaymentStatus.RemainderCharging));
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() =>
+            CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please"));
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetCancellationQuoteAsync_DepositOnly_ReturnsZeroRefund()
+    {
+        SetupClientRepo(CreateClient());
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>()))
+            .ReturnsAsync(DepositPayment(PaymentStatus.DepositPaid_RemainderDue));
+
+        var quote = await CreateService().GetCancellationQuoteAsync(1, ClientUserId);
+
+        Assert.Equal(0m, quote.RefundPercent);
+        Assert.Equal(0m, quote.RefundAmount);
+    }
+
     // ---------------- AcceptBookingRequestAsync ----------------
 
     [Fact]

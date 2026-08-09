@@ -489,6 +489,20 @@ public class BookingService : IBookingService
                 $"Cannot quote a cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
         }
 
+        var quotePayment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+        if (IsDepositOnly(quotePayment))
+        {
+            // Deposit-only booking (remainder not paid): cancelling forfeits the deposit — non-refundable.
+            var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+            return new CancellationQuoteDto
+            {
+                DaysUntilEvent = booking.EventDate.DayNumber - today.DayNumber,
+                RefundPercent = 0m,
+                RefundAmount = 0m
+            };
+        }
+
         var (percent, amount, daysUntilEvent) = ResolveCancellationRefund(booking);
         return new CancellationQuoteDto
         {
@@ -497,6 +511,17 @@ public class BookingService : IBookingService
             RefundAmount = amount
         };
     }
+
+    /// <summary>
+    /// A deposit-path booking whose remainder has NOT been collected (still owing it — DepositPaid_RemainderDue
+    /// or RemainderFailed). Cancelling such a booking forfeits the deposit: immediate cancel, slot released, no
+    /// refund and no admin review — mirroring the grace-expiry job's forfeit outcome. A fully-paid deposit
+    /// (FullyPaid) and a full-payment booking (Completed) are NOT deposit-only and keep the admin-review path.
+    /// </summary>
+    private static bool IsDepositOnly(Payment? payment) =>
+        payment is not null
+        && payment.IsDeposit
+        && payment.Status is PaymentStatus.DepositPaid_RemainderDue or PaymentStatus.RemainderFailed;
 
     /// <summary>
     /// The client requests cancellation of an Accepted booking. This does NOT cancel the booking,
@@ -528,6 +553,23 @@ public class BookingService : IBookingService
                 $"Cannot request cancellation for a booking request with status '{booking.Status}'. Only accepted bookings can be cancelled.");
         }
 
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new DepositPaymentByBookingRequestSpecification(bookingRequestId));
+
+        // A remainder charge is mid-flight (e.g. the client is completing SCA) — don't cancel underneath it.
+        if (payment is not null && payment.IsDeposit && payment.Status == PaymentStatus.RemainderCharging)
+        {
+            throw new BadRequestExeption(
+                "A payment for the remaining balance is being processed. Please wait a moment before cancelling.");
+        }
+
+        // Deposit-only (remainder unpaid): forfeit the deposit and cancel immediately — no admin review.
+        if (IsDepositOnly(payment))
+        {
+            return await CancelDepositOnlyImmediatelyAsync(booking, clientUserId, reason);
+        }
+
+        // Fully-paid deposit (FullyPaid) and full-payment (Completed) bookings: unchanged admin-review path.
         var (percent, amount, _) = ResolveCancellationRefund(booking);
 
         var now = DateTimeOffset.UtcNow;
@@ -581,6 +623,77 @@ public class BookingService : IBookingService
                 "Client requested a cancellation",
                 $"The client requested to cancel the booking for {booking.EventDate:d}. " +
                 "Your slot stays reserved until an admin reviews the request."));
+        }
+
+        return await MapBookingWithSlotAsync(booking);
+    }
+
+    /// <summary>
+    /// Deposit-only cancellation: the client cancels a booking whose remainder was never paid. The deposit is
+    /// forfeited (kept — no Stripe refund), the booking is cancelled immediately and the vendor's slot is
+    /// released, with NO admin review entry. This mirrors the grace-expiry job's forfeit outcome, just
+    /// client-initiated and resolved at once. Both background jobs skip it afterwards (they select on
+    /// Status == Accepted, and this booking is now Cancelled).
+    /// </summary>
+    private async Task<BookingRequestDto> CancelDepositOnlyImmediatelyAsync(BookingRequest booking, long clientUserId, string reason)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var previousStatus = booking.Status;
+        booking.Status = BookingStatus.Cancelled;
+        booking.CancelledAt = now;
+        booking.CancellationReason = reason;
+        booking.CancellationRequestedAt = now;
+        booking.CancellationReviewedAt = now;      // resolved immediately — there is no admin step
+        booking.CancellationRefundPercent = 0m;
+        booking.CancellationRefundAmount = 0m;
+        booking.RefundStatus = RefundStatus.None;  // deposit forfeited — nothing is refunded
+        booking.UpdatedAt = now;
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            repo.Update(booking);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(booking.Id));
+            foreach (var hold in holds)
+            {
+                hold.Status = AvailabilityStatus.Available;
+                hold.BookingRequestId = null;
+                hold.BookingRequest = null;
+                hold.HoldExpiresAt = null;
+                holdRepo.Update(hold);
+            }
+
+            var history = new BookingStatusHistory
+            {
+                BookingRequestId = booking.Id,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Cancelled.ToString(),
+                ChangedByUserId = clientUserId,
+                Notes = "Cancelled by client; remaining balance unpaid, so the deposit is forfeited (non-refundable)."
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
+
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        // No admin notification — there is no review. Just let the vendor know the slot is free again.
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.BookingCancelled,
+                "Booking cancelled",
+                $"The client cancelled their booking for {booking.EventDate:d}. Your slot is available again."));
         }
 
         return await MapBookingWithSlotAsync(booking);
