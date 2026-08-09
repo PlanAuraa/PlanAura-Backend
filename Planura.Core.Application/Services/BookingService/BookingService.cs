@@ -1617,6 +1617,16 @@ public class BookingService : IBookingService
         dto.ContractDocumentUrl = _attachmentService.ToAbsoluteUrl(dto.ContractDocumentUrl);
         dto.ClientName = booking.Client?.User?.FullName;
 
+        // Surface the deposit split (when the Payments were loaded — client list/detail specs Include them)
+        // so the cancel warning can show the exact forfeited deposit. Full-payment bookings have no deposit.
+        var depositPayment = booking.Payments?.FirstOrDefault(payment => payment.IsDeposit);
+        if (depositPayment is not null)
+        {
+            dto.IsDeposit = true;
+            dto.DepositAmount = depositPayment.DepositAmount;
+            dto.TotalAmount = depositPayment.TotalAmount;
+        }
+
         // Relies on the linked VendorAvailability being loaded — either via an explicit Include on the
         // spec that fetched `booking` (BookingRequestByIdSpecification / By-Client / By-Vendor), or
         // EF's change-tracker fixup after this same DbContext instance already loaded/touched that

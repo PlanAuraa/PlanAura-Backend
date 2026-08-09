@@ -14,6 +14,13 @@ public class BookingRequestDto
     public int? GuestCount { get; set; }
     public decimal? AgreedPrice { get; set; }
     public string? ClientMessage { get; set; }
+
+    // Deposit / partial-payment (Phase 3, surfaced for the client cancel warning). IsDeposit distinguishes a
+    // deposit-path booking; DepositAmount/TotalAmount are the recorded split so the UI can show the exact
+    // forfeited deposit on a deposit-only cancellation. Null/false on the full-payment path.
+    public bool IsDeposit { get; set; }
+    public decimal? DepositAmount { get; set; }
+    public decimal? TotalAmount { get; set; }
     public BookingStatus Status { get; set; }
     public BookingPaymentStatus PaymentStatus { get; set; }
     public string? VendorResponse { get; set; }

@@ -9,5 +9,6 @@ public class BookingRequestByIdSpecification : BaseSpecification<BookingRequest>
     {
         AddInclude(booking => booking.Client.User);
         AddInclude(booking => booking.VendorAvailability);
+        AddInclude(booking => booking.Payments); // deposit split for the client cancel warning
     }
 }
