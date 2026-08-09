@@ -29,10 +29,17 @@ public class BookingOptions
     public int RemainderChargeLeadDays { get; set; } = 4;
 
     /// <summary>
-    /// Grace window after a failed remainder charge before escalation/cancellation. Stored now so the
-    /// config is complete; NOT used in Phase 1 (wired in a later phase).
+    /// Grace window (days) after a failed remainder charge before the grace-expiry job routes the booking
+    /// to admin cancellation review. Measured from Payment.RemainderFailedAt.
     /// </summary>
     public int GracePeriodDays { get; set; } = 2;
+
+    /// <summary>
+    /// How long (minutes) a payment may sit in the transient RemainderCharging claim state before the
+    /// grace-expiry job reclaims it to RemainderFailed — covers an abandoned on-session SCA so a payment is
+    /// never permanently stuck. Should comfortably exceed how long a client takes to complete 3-D Secure.
+    /// </summary>
+    public int RemainderChargingTimeoutMinutes { get; set; } = 60;
 
     /// <summary>
     /// Days after a booking enters AwaitingConfirmation (the event's slot has ended) before it

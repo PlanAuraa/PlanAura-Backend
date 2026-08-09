@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging;
+using Planura.Core.Application.Models.Emails;
 using Planura.Core.Application.Models.Notification;
+using Planura.Core.Application.Services.Emails;
 using Planura.Core.Application.Specifications.Notification;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Repositories;
@@ -12,15 +15,21 @@ public class NotificationService : INotificationService
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICurrentUserService _currentUserService;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IEmailService _emailService;
+    private readonly ILogger<NotificationService> _logger;
 
     public NotificationService(
         IUnitOfWork unitOfWork,
         ICurrentUserService currentUserService,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        IEmailService emailService,
+        ILogger<NotificationService> logger)
     {
         _unitOfWork = unitOfWork;
         _currentUserService = currentUserService;
         _userManager = userManager;
+        _emailService = emailService;
+        _logger = logger;
     }
 
     public async Task NotifyUserAsync(long userId, string type, string title, string? body = null, string? dataJson = null)
@@ -37,6 +46,35 @@ public class NotificationService : INotificationService
 
         await _unitOfWork.Repository<Notification, long>().AddAsync(notification);
         await _unitOfWork.SaveChangesAsync();
+    }
+
+    public async Task NotifyUserWithEmailAsync(
+        long userId, string type, string title, string? body = null, string? dataJson = null,
+        string? emailSubject = null, string? emailBody = null)
+    {
+        // The in-app notification is the durable record and must succeed; the email is a best-effort extra.
+        await NotifyUserAsync(userId, type, title, body, dataJson);
+
+        try
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+            if (user is not null && !string.IsNullOrWhiteSpace(user.Email))
+            {
+                await _emailService.SendEmail(new Email
+                {
+                    To = user.Email,
+                    Subject = emailSubject ?? title,
+                    Body = emailBody ?? body ?? title
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never let a mail failure fail the caller or undo the in-app notification.
+            _logger.LogWarning(ex,
+                "Failed to send email for notification type {Type} to user {UserId}; the in-app notification was still created.",
+                type, userId);
+        }
     }
 
     public async Task NotifyRoleAsync(string role, string type, string title, string? body = null, string? dataJson = null)

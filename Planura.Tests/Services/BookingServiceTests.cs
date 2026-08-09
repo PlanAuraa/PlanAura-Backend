@@ -704,6 +704,57 @@ public class BookingServiceTests
         Assert.Equal(PackagePrice, payment.Amount);
     }
 
+    // ---------------- PreviewPaymentAsync: pre-payment deposit breakdown (Phase 4) ----------------
+
+    private void SetupPreviewFacts(VendorAvailability slot)
+    {
+        SetupClientRepo(CreateClient());
+        var eventPlanRepo = _unitOfWorkMock.SetupRepository<EventPlan, long>();
+        eventPlanRepo.Setup(r => r.GetAsync(EventPlanId)).ReturnsAsync(CreateEventPlan());
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>())).ReturnsAsync(slot);
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(VendorUserId)).ReturnsAsync(CreateVendorUser());
+        SetupPackageRepo();
+    }
+
+    private static AgreementPreviewRequestDto PreviewDto() => new()
+    {
+        EventPlanId = EventPlanId,
+        AvailabilityId = AvailabilityId,
+        VendorPackageId = PackageId
+    };
+
+    [Fact]
+    public async Task PreviewPaymentAsync_EventBeyondThreshold_ReturnsDepositBreakdown()
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(60);
+        SetupPreviewFacts(CreateSlot(startAt: start));
+
+        var preview = await CreateService().PreviewPaymentAsync(ClientUserId, PreviewDto());
+
+        Assert.True(preview.IsDeposit);
+        Assert.Equal(1000m, preview.DepositAmount);   // 20% of 5000
+        Assert.Equal(PackagePrice, preview.TotalAmount);
+        Assert.Equal(4000m, preview.RemainderAmount); // 5000 - 1000
+        var eventDate = DateOnly.FromDateTime(start.UtcDateTime);
+        Assert.Equal(eventDate.AddDays(-4), preview.RemainderChargeDate); // RemainderChargeLeadDays default 4
+        Assert.Equal("EGP", preview.Currency);
+    }
+
+    [Fact]
+    public async Task PreviewPaymentAsync_EventWithinThreshold_ReturnsFullPaymentNoRemainder()
+    {
+        SetupPreviewFacts(CreateSlot(startAt: DateTimeOffset.UtcNow.AddDays(3)));
+
+        var preview = await CreateService().PreviewPaymentAsync(ClientUserId, PreviewDto());
+
+        Assert.False(preview.IsDeposit);
+        Assert.Equal(PackagePrice, preview.TotalAmount);
+        Assert.Equal(0m, preview.RemainderAmount);
+        Assert.Null(preview.RemainderChargeDate);
+    }
+
     // ---------------- CreateBookingRequestAsync: save card on deposit path (Phase 2, Section A) ----------------
 
     [Fact]
@@ -750,6 +801,167 @@ public class BookingServiceTests
         Assert.Null(authorizeRequest.CustomerId);
         Assert.False(authorizeRequest.SaveCardForOffSession);
         Assert.Null(payment.SavedPaymentMethodId);
+    }
+
+    // ---------------- PayRemainderAsync: client on-session pay-remainder (Phase 3, Section D) ----------------
+
+    /// <summary>Wires the repos/mocks a PayRemainderAsync call needs and returns the tracked payment/booking.</summary>
+    private (BookingRequest Booking, Payment Payment) SetupPayRemainder(
+        PaymentStatus paymentStatus = PaymentStatus.DepositPaid_RemainderDue,
+        bool isDeposit = true,
+        string? savedPaymentMethodId = "pm_saved",
+        string? stripeCustomerId = "cus_x",
+        long bookingClientId = ClientId,
+        bool claimSucceeds = true)
+    {
+        var client = CreateClient();
+        client.StripeCustomerId = stripeCustomerId;
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(client);
+
+        var booking = CreateBooking(status: BookingStatus.Accepted, clientId: bookingClientId);
+        booking.PaymentStatus = BookingPaymentStatus.DepositPaid;
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var payment = new Payment
+        {
+            Id = 1,
+            BookingRequestId = 1,
+            ClientId = ClientId,
+            VendorId = VendorId,
+            IsDeposit = isDeposit,
+            DepositAmount = 1000m,
+            TotalAmount = PackagePrice,
+            SavedPaymentMethodId = savedPaymentMethodId,
+            Status = paymentStatus
+        };
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(claimSucceeds);
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
+
+        return (booking, payment);
+    }
+
+    private void SetupChargeOnSession(string status, string paymentIntentId = "pi_onsession", string? clientSecret = "cs_test")
+    {
+        _paymentGatewayServiceMock
+            .Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = paymentIntentId, ClientSecret = clientSecret, Status = status });
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_EligibleRemainderDue_ChargesAndMarksFullyPaidClearingGrace()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        payment.RemainderFailedAt = DateTimeOffset.UtcNow; // pretend a prior failure set the grace clock
+        ChargeOnSessionRequest? charge = null;
+        _paymentGatewayServiceMock.Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .Callback<ChargeOnSessionRequest>(r => charge = r)
+            .ReturnsAsync(new PaymentIntentResult { PaymentIntentId = "pi_onsession", ClientSecret = "cs", Status = "succeeded" });
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.Equal("succeeded", result.Status);
+        Assert.False(result.RequiresAction);
+        Assert.NotNull(charge);
+        Assert.Equal(400000, charge!.AmountInSmallestUnit);            // 5000 - 1000 = 4000.00
+        Assert.Equal("remainder-onsession-1", charge.IdempotencyKey);  // client's own stable key
+        Assert.Equal("cus_x", charge.CustomerId);
+        Assert.Equal("pm_saved", charge.PaymentMethodId);
+
+        Assert.Equal(PaymentStatus.FullyPaid, payment.Status);
+        Assert.Equal("pi_onsession", payment.RemainderGatewayReference);
+        Assert.Null(payment.RemainderFailedAt);                        // grace cleared
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_EligibleRemainderFailed_Succeeds()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.RemainderFailed);
+        SetupChargeOnSession("succeeded");
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.Equal("succeeded", result.Status);
+        Assert.Equal(PaymentStatus.FullyPaid, payment.Status);
+        Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_RequiresAction_ReturnsClientSecretAndStaysCharging()
+    {
+        var (_, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        SetupChargeOnSession("requires_action", paymentIntentId: "pi_sca", clientSecret: "cs_sca");
+
+        var result = await CreateService().PayRemainderAsync(1, ClientUserId);
+
+        Assert.True(result.RequiresAction);
+        Assert.Equal("requires_action", result.Status);
+        Assert.Equal("cs_sca", result.ClientSecret);
+        // Stays claimed (RemainderCharging) with the remainder PI id stored so the webhook can finalize it.
+        Assert.Equal(PaymentStatus.RemainderCharging, payment.Status);
+        Assert.Equal("pi_sca", payment.RemainderGatewayReference);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_IneligibleState_ThrowsBadRequest()
+    {
+        SetupPayRemainder(PaymentStatus.FullyPaid);
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_NotOwner_ThrowsNotFound()
+    {
+        SetupPayRemainder(bookingClientId: ClientId + 999); // booking belongs to a different client
+
+        await Assert.ThrowsAsync<NotFoundExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_FullPaymentPath_ThrowsBadRequest()
+    {
+        SetupPayRemainder(isDeposit: false); // full-payment booking has no remainder
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_CannotClaim_ThrowsBadRequestAndDoesNotCharge()
+    {
+        // Interleaving: the background job already claimed this payment -> client can't, and must not charge.
+        SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue, claimSucceeds: false);
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task PayRemainderAsync_ChargeDeclined_TransitionsRemainderFailedAndThrows()
+    {
+        var (booking, payment) = SetupPayRemainder(PaymentStatus.DepositPaid_RemainderDue);
+        _paymentGatewayServiceMock.Setup(g => g.ChargeOnSessionAsync(It.IsAny<ChargeOnSessionRequest>()))
+            .ThrowsAsync(new PaymentDeclinedExeption("Your card was declined."));
+
+        await Assert.ThrowsAsync<PaymentDeclinedExeption>(() => CreateService().PayRemainderAsync(1, ClientUserId));
+
+        Assert.Equal(PaymentStatus.RemainderFailed, payment.Status);
+        Assert.NotNull(payment.RemainderFailedAt);
+        Assert.Equal(BookingPaymentStatus.RemainderFailed, booking.PaymentStatus);
     }
 
     [Fact]
@@ -949,6 +1161,140 @@ public class BookingServiceTests
             VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         Assert.Equal(BookingStatus.Cancelled, result.Status);
+    }
+
+    // ---------------- RequestCancellationAsync: deposit-aware manual cancel (Phase 3, Section G) ----------------
+
+    private (BookingRequest Booking, VendorAvailability Hold) SetupRequestCancellation(Payment payment)
+    {
+        SetupClientRepo(CreateClient());
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.PaymentStatus = BookingPaymentStatus.DepositPaid;
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+
+        var hold = CreateSlot(status: AvailabilityStatus.Booked);
+        hold.BookingRequestId = 1;
+        hold.BookingRequest = booking;
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        return (booking, hold);
+    }
+
+    private static Payment DepositPayment(PaymentStatus status) => new()
+    {
+        Id = 1,
+        BookingRequestId = 1,
+        ClientId = ClientId,
+        VendorId = VendorId,
+        IsDeposit = true,
+        DepositAmount = 1000m,
+        TotalAmount = PackagePrice,
+        Status = status
+    };
+
+    [Fact]
+    public async Task RequestCancellationAsync_DepositOnlyRemainderDue_ImmediateForfeitCancelReleasesSlotNoAdmin()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.DepositPaid_RemainderDue));
+
+        var result = await CreateService().RequestCancellationAsync(1, ClientUserId, "changed my mind");
+
+        // Immediate cancel + slot released + deposit forfeited (no refund), NO admin review.
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.NotNull(booking.CancelledAt);
+        Assert.Equal(RefundStatus.None, booking.RefundStatus);
+        Assert.Equal(0m, booking.CancellationRefundAmount);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // No admin review entry, no Stripe refund.
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+        _paymentGatewayServiceMock.Verify(g => g.RefundPaymentIntentAsync(It.IsAny<RefundPaymentIntentRequest>()), Times.Never);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            VendorUserId, NotificationTypes.BookingCancelled, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_RemainderFailed_ImmediateForfeitCancel()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.RemainderFailed));
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "no longer needed");
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Equal(RefundStatus.None, booking.RefundStatus);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_FullyPaidDeposit_GoesToAdminReview()
+    {
+        var (booking, hold) = SetupRequestCancellation(DepositPayment(PaymentStatus.FullyPaid));
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please");
+
+        // Unchanged admin-review path: request only — not cancelled, slot NOT released, admin notified.
+        Assert.Equal(BookingStatus.CancellationRequested, booking.Status);
+        Assert.Equal(RefundStatus.PendingReview, booking.RefundStatus);
+        Assert.Equal(AvailabilityStatus.Booked, hold.Status); // slot untouched, awaits admin
+        _notificationServiceMock.Verify(n => n.NotifyRoleAsync(
+            Roles.Admin, NotificationTypes.BookingCancellationRequested, It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_FullPaymentPath_GoesToAdminReview()
+    {
+        // Full-payment booking: no deposit payment on file (IsDeposit=false / not found) -> review path.
+        var completed = DepositPayment(PaymentStatus.Completed);
+        completed.IsDeposit = false;
+        var (booking, _) = SetupRequestCancellation(completed);
+
+        await CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please");
+
+        Assert.Equal(BookingStatus.CancellationRequested, booking.Status);
+        Assert.Equal(RefundStatus.PendingReview, booking.RefundStatus);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_RemainderCharging_Rejected()
+    {
+        SetupRequestCancellation(DepositPayment(PaymentStatus.RemainderCharging));
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() =>
+            CreateService().RequestCancellationAsync(1, ClientUserId, "cancel please"));
+        _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetCancellationQuoteAsync_DepositOnly_ReturnsZeroRefund()
+    {
+        SetupClientRepo(CreateClient());
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(1L)).ReturnsAsync(booking);
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>()))
+            .ReturnsAsync(DepositPayment(PaymentStatus.DepositPaid_RemainderDue));
+
+        var quote = await CreateService().GetCancellationQuoteAsync(1, ClientUserId);
+
+        Assert.Equal(0m, quote.RefundPercent);
+        Assert.Equal(0m, quote.RefundAmount);
     }
 
     // ---------------- AcceptBookingRequestAsync ----------------

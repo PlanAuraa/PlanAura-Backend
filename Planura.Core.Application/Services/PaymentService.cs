@@ -50,6 +50,16 @@ public class PaymentService : IPaymentService
         var payment = await _unitOfWork.Repository<Payment, long>()
             .GetWithSpecAsync(new PaymentByGatewayReferenceSpecification(gatewayEvent.PaymentIntentId));
 
+        // The deposit PI didn't match — try the remainder PI (a different id, stored separately). This is
+        // how an on-session (SCA) remainder payment completed in the client's browser gets reconciled.
+        var matchedByRemainderReference = false;
+        if (payment is null)
+        {
+            payment = await _unitOfWork.Repository<Payment, long>()
+                .GetWithSpecAsync(new PaymentByRemainderGatewayReferenceSpecification(gatewayEvent.PaymentIntentId));
+            matchedByRemainderReference = payment is not null;
+        }
+
         if (payment is null)
         {
             if (gatewayEvent.Type == "payment_intent.amount_capturable_updated")
@@ -77,10 +87,24 @@ public class PaymentService : IPaymentService
         switch (gatewayEvent.Type)
         {
             case "payment_intent.succeeded":
-                await HandlePaymentSucceededAsync(payment);
+                if (matchedByRemainderReference)
+                {
+                    await HandleRemainderSucceededAsync(payment);
+                }
+                else
+                {
+                    await HandlePaymentSucceededAsync(payment);
+                }
                 break;
             case "payment_intent.payment_failed":
-                await HandlePaymentFailedAsync(payment);
+                if (matchedByRemainderReference)
+                {
+                    await HandleRemainderFailedAsync(payment);
+                }
+                else
+                {
+                    await HandlePaymentFailedAsync(payment);
+                }
                 break;
             case "payment_intent.canceled":
                 await HandlePaymentCanceledAsync(payment);
@@ -180,6 +204,99 @@ public class PaymentService : IPaymentService
                 NotificationTypes.PaymentReceived,
                 "Payment received",
                 "You received a payment for a booking."));
+        }
+    }
+
+    /// <summary>
+    /// Reconciles a successful on-session remainder PaymentIntent (deposit path, Phase 3) — the SCA the
+    /// client completed in the browser. Transitions to FullyPaid, ends the grace window, and notifies. The
+    /// synchronous PayRemainderAsync path may have already recorded FullyPaid, in which case this no-ops.
+    /// </summary>
+    private async Task HandleRemainderSucceededAsync(Payment payment)
+    {
+        if (payment.Status == PaymentStatus.FullyPaid)
+        {
+            return; // already finalized synchronously — avoid duplicate notifications
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        payment.Status = PaymentStatus.FullyPaid;
+        payment.PaidAt ??= now;
+        payment.RemainderChargedAt ??= now;
+        payment.RemainderFailedAt = null;       // grace ends
+        payment.RemainderFailureReason = null;
+        _unitOfWork.Repository<Payment, long>().Update(payment);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(payment.BookingRequestId);
+        if (booking is not null)
+        {
+            booking.PaymentStatus = BookingPaymentStatus.Paid;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+        }
+
+        await _unitOfWork.SaveChangesAsync();
+
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(payment.ClientId);
+        if (client is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserWithEmailAsync(
+                client.UserId,
+                NotificationTypes.RemainderPaid,
+                "Your booking is now fully paid",
+                "Your payment for the remaining balance was successful. Your booking is fully paid.",
+                emailSubject: "Your booking is fully paid",
+                emailBody: "Your payment for the remaining balance was successful. Your booking is now paid in full — thank you."));
+        }
+
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(payment.VendorId);
+        if (vendor is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
+                vendor.UserId,
+                NotificationTypes.PaymentReceived,
+                "Remaining balance received",
+                "The remaining balance for a booking has been received."));
+        }
+    }
+
+    /// <summary>
+    /// Reconciles a failed on-session remainder PaymentIntent (e.g. the client's SCA authentication failed).
+    /// Transitions to RemainderFailed and (re)starts the grace window, unless already resolved.
+    /// </summary>
+    private async Task HandleRemainderFailedAsync(Payment payment)
+    {
+        if (payment.Status is PaymentStatus.FullyPaid or PaymentStatus.RemainderFailed)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        payment.Status = PaymentStatus.RemainderFailed;
+        payment.RemainderFailedAt ??= now;
+        payment.RemainderFailureReason ??= "On-session remainder payment was not completed.";
+        _unitOfWork.Repository<Payment, long>().Update(payment);
+
+        var booking = await _unitOfWork.Repository<BookingRequest, long>().GetAsync(payment.BookingRequestId);
+        if (booking is not null)
+        {
+            booking.PaymentStatus = BookingPaymentStatus.RemainderFailed;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+        }
+
+        await _unitOfWork.SaveChangesAsync();
+
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(payment.ClientId);
+        if (client is not null)
+        {
+            await NotifyBestEffortAsync(() => _notificationService.NotifyUserWithEmailAsync(
+                client.UserId,
+                NotificationTypes.RemainderFailed,
+                "We couldn't collect your remaining balance",
+                "Your remaining balance payment wasn't completed. Please try again to keep your booking.",
+                emailSubject: "Action needed: your remaining balance wasn't paid",
+                emailBody: "Your remaining balance payment wasn't completed. Please try again as soon as possible to keep your booking."));
         }
     }
 

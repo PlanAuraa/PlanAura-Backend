@@ -26,6 +26,16 @@ public class Payment
     public DateTimeOffset? RemainderChargedAt { get; set; }
     public string? RemainderFailureReason { get; set; }
 
+    // Deposit / partial-payment (Phase 3). When the off-session remainder charge failed and the grace
+    // window started. The grace period ends at RemainderFailedAt + GracePeriodDays; the grace-expiry job
+    // uses this. Null unless the payment is in RemainderFailed.
+    public DateTimeOffset? RemainderFailedAt { get; set; }
+
+    // Deposit / partial-payment (Phase 3). When the payment was atomically claimed into RemainderCharging.
+    // The grace-expiry job reclaims a payment stuck in RemainderCharging past a timeout (e.g. an abandoned
+    // on-session SCA) back to RemainderFailed, so it never stays stuck.
+    public DateTimeOffset? RemainderChargingSince { get; set; }
+
     public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
     public string? PaymentMethod { get; set; }
     public string? GatewayReference { get; set; }

@@ -230,12 +230,14 @@ namespace Planura.Core.Application.Services.AdminBooking
 
             if (refundAmount > 0)
             {
+                // Refundable = Completed (full-payment) or FullyPaid (deposit whose remainder was collected).
+                // A deposit-only booking has no refundable payment here and is non-refundable by policy.
                 var payment = await _unitOfWork.Repository<Payment, long>()
-                    .GetWithSpecAsync(new CompletedPaymentByBookingRequestSpecification(bookingId));
+                    .GetWithSpecAsync(new RefundablePaymentByBookingRequestSpecification(bookingId));
                 if (payment is null)
                 {
                     throw new BadRequestExeption(
-                        "No captured payment was found for this booking; the cancellation cannot be approved.");
+                        "No refundable (fully-captured) payment was found for this booking; the cancellation cannot be approved.");
                 }
 
                 await _adminPaymentService.RefundPaymentAsync(payment.Id, adminId, new RefundPaymentDto

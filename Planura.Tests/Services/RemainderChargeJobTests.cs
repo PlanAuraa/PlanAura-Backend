@@ -3,8 +3,10 @@ using Microsoft.Extensions.Options;
 using Moq;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Common;
+using Planura.Core.Application.Services;
 using Planura.Core.Application.Services.RemainderChargeJob;
 using Planura.Core.Application.Specifications;
+using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
@@ -17,16 +19,19 @@ namespace Planura.Tests.Services;
 public class RemainderChargeJobTests
 {
     private const long ClientId = 10;
+    private const long ClientUserId = 500;
     private const long VendorId = 20;
     private const long BookingRequestId = 60;
     private const long PaymentId = 7;
 
     private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
     private readonly Mock<IPaymentGatewayService> _paymentGatewayServiceMock = new();
+    private readonly Mock<INotificationService> _notificationServiceMock = new();
 
     private RemainderChargeJob CreateJob() => new(
         _unitOfWorkMock.Object,
         _paymentGatewayServiceMock.Object,
+        _notificationServiceMock.Object,
         Options.Create(new BookingOptions { RemainderChargeLeadDays = 4 }),
         Options.Create(new StripeOptions { DefaultCurrency = "EGP" }),
         NullLogger<RemainderChargeJob>.Instance);
@@ -71,6 +76,11 @@ public class RemainderChargeJobTests
         clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(client);
 
         _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+
+        // By default the job wins the atomic claim (DepositPaid_RemainderDue -> RemainderCharging).
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
     }
 
     [Fact]
@@ -102,6 +112,11 @@ public class RemainderChargeJobTests
         Assert.Equal(BookingPaymentStatus.Paid, booking.PaymentStatus);
 
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // Client is notified (in-app + email) that the booking is fully paid.
+        _notificationServiceMock.Verify(n => n.NotifyUserWithEmailAsync(
+            ClientUserId, NotificationTypes.RemainderPaid, It.IsAny<string>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -173,8 +188,14 @@ public class RemainderChargeJobTests
 
         Assert.Equal(PaymentStatus.RemainderFailed, payment.Status);
         Assert.Contains("insufficient funds", payment.RemainderFailureReason);
+        Assert.NotNull(payment.RemainderFailedAt); // grace clock started
         Assert.Equal(BookingPaymentStatus.RemainderFailed, booking.PaymentStatus);
         _unitOfWorkMock.Verify(u => u.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // Client is notified (in-app + email) to pay the remainder.
+        _notificationServiceMock.Verify(n => n.NotifyUserWithEmailAsync(
+            ClientUserId, NotificationTypes.RemainderFailed, It.IsAny<string>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -196,6 +217,24 @@ public class RemainderChargeJobTests
 
         _paymentGatewayServiceMock.Verify(g => g.ChargeOffSessionAsync(It.IsAny<ChargeOffSessionRequest>()), Times.Once);
         Assert.Equal(PaymentStatus.RemainderFailed, payment.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_CannotClaim_SkipsWithoutCharging()
+    {
+        // Interleaving: the client's on-session pay-remainder already claimed this payment, so the job's
+        // atomic claim fails -> it must NOT charge (no double-charge).
+        var booking = CreateDepositBooking();
+        var payment = CreateRemainderDuePayment();
+        var client = new Client { Id = ClientId, UserId = ClientUserId, StripeCustomerId = "cus_x" };
+        SetupRepos(booking, payment, client);
+        _unitOfWorkMock
+            .Setup(u => u.TryClaimRemainderChargeAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false); // client (or another run) holds the claim
+
+        await CreateJob().RunAsync();
+
+        _paymentGatewayServiceMock.Verify(g => g.ChargeOffSessionAsync(It.IsAny<ChargeOffSessionRequest>()), Times.Never);
     }
 
     // ---- Spec-level filtering: full-path / not-due / non-accepted bookings must not be selected ----
