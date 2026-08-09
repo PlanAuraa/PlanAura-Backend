@@ -262,6 +262,16 @@ namespace Planura.Core.Application.Services.AdminBooking
             booking.CancellationReviewNotes = dto.Note;
             booking.CancellationReviewedAt = now;
             booking.RefundStatus = RefundStatus.Processed;
+            // Persist the ACTUAL refunded amount the admin decided (full or partial) back onto the booking,
+            // overwriting the estimate locked in at request time — otherwise an admin override (dto.Amount)
+            // would leave the client DTO showing the stale estimate. Percent is recomputed from the same
+            // captured basis the estimate used (AgreedPrice) so the two fields stay consistent; the client
+            // reads Percent >= 100 as a full refund.
+            booking.CancellationRefundAmount = refundAmount;
+            var capturedBasis = booking.AgreedPrice ?? 0m;
+            booking.CancellationRefundPercent = capturedBasis > 0m
+                ? Math.Round(refundAmount / capturedBasis * 100m, 2, MidpointRounding.AwayFromZero)
+                : 0m;
             booking.UpdatedAt = now;
 
             await _unitOfWork.BeginTransactionAsync();
