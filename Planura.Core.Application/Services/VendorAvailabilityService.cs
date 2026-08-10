@@ -12,6 +12,15 @@ public class VendorAvailabilityService : IVendorAvailabilityService
 {
     private const string ConcurrencyExceptionName = "DbUpdateConcurrencyException";
 
+    /// <summary>
+    /// Planura operates in Egypt. Recurring-slot StartTime/EndTime are plain wall-clock times the
+    /// vendor typed with no offset of their own (unlike single-slot StartAt/EndAt, which already
+    /// arrive as full ISO instants computed client-side) — this is the one fixed offset that turns
+    /// "12:00" into the correct instant. Previously this was TimeSpan.Zero (i.e. treated as UTC),
+    /// which stored every recurring slot 3 hours off from what the vendor actually entered.
+    /// </summary>
+    private static readonly TimeSpan EgyptUtcOffset = TimeSpan.FromHours(3);
+
     private readonly IUnitOfWork _unitOfWork;
     private readonly IMapper _mapper;
 
@@ -128,8 +137,8 @@ public class VendorAvailabilityService : IVendorAvailabilityService
                 continue;
             }
 
-            var startAt = new DateTimeOffset(date.ToDateTime(dto.StartTime), TimeSpan.Zero);
-            var endAt = new DateTimeOffset(date.ToDateTime(dto.EndTime), TimeSpan.Zero);
+            var startAt = new DateTimeOffset(date.ToDateTime(dto.StartTime), EgyptUtcOffset);
+            var endAt = new DateTimeOffset(date.ToDateTime(dto.EndTime), EgyptUtcOffset);
 
             var overlaps = existingSlots.Any(slot => slot.StartAt < endAt && slot.EndAt > startAt)
                 || newSlots.Any(slot => slot.StartAt < endAt && slot.EndAt > startAt);

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Planura.Core.Application.Abstraction.Contract;
 using Planura.Core.Application.Models;
@@ -8,15 +7,19 @@ using Planura.Shared.Errors.Models;
 namespace Planura.Core.Application.Services.Contract;
 
 /// <summary>
-/// Orchestrates AI document generation for every contract type Planura issues: the Event Booking
-/// Contract (Client vs Vendor) and the Vendor Partnership Agreement (Planura vs Vendor).
+/// Generates every contract type Planura issues: the Event Booking Contract (Client vs Vendor) and
+/// the Vendor Partnership Agreement (Planura vs Vendor).
 /// <para>
-/// The two documents are deliberately generated very differently, because they are different kinds of
-/// document. The partnership agreement is a platform-wide instrument: every vendor signs substantially
-/// the same terms, so a fixed clause list is correct there. The booking contract governs one
-/// negotiated transaction, so it is generated from a <see cref="ContractGenerationContext"/> through a
-/// two-stage pipeline - extract the deal, then draft from the extracted deal - with no fixed clause
-/// list at all, and the result is validated back against the source facts before it is rendered.
+/// The two documents are generated very differently. The partnership agreement is a platform-wide
+/// instrument - every vendor signs substantially the same terms - so it is drafted by Gemini from a
+/// fixed clause list and boilerplate prompt (see <see cref="GenerateVendorPartnershipContractAsync"/>).
+/// The booking contract governs one negotiated transaction and used to be drafted by Gemini too (a
+/// two-stage extract-then-draft pipeline, validated and regenerated on a miss), but that made every
+/// booking contract depend on an external, quota-limited AI service being reachable the moment a
+/// client or vendor needed to read it. It is now composed deterministically from
+/// <see cref="ContractGenerationContext"/> by <see cref="BuildTemplateDraft"/> instead - no AI call,
+/// no quota, still specific to the transaction because every fact-bearing section is built from the
+/// same context fields the AI prompt used to receive.
 /// </para>
 /// <para>
 /// Holds no Gemini HTTP or QuestPDF layout knowledge itself - that stays in
@@ -25,28 +28,6 @@ namespace Planura.Core.Application.Services.Contract;
 /// </summary>
 public class ContractService : IContractService
 {
-    /// <summary>Analysis is short and benefits from consistency; drafting needs room for a full contract.</summary>
-    private const int DealAnalysisMaxTokens = 6144;
-    private const int ContractDraftMaxTokens = 16384;
-
-    /// <summary>
-    /// Low but not zero. Variation between contracts must come from the input facts, not from
-    /// sampling - but drafting still needs enough latitude to phrase genuinely different clause sets
-    /// naturally rather than snapping to the most templated wording it knows.
-    /// </summary>
-    private const double DealAnalysisTemperature = 0.2;
-    private const double ContractDraftTemperature = 0.45;
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    private static readonly JsonSerializerOptions AnalysisEchoOptions = new()
-    {
-        WriteIndented = true
-    };
-
     private readonly IGeminiService _geminiService;
     private readonly IPdfService _pdfService;
     private readonly ILogger<ContractService> _logger;
@@ -60,7 +41,7 @@ public class ContractService : IContractService
 
     // ============================================================= Event Booking Contract
 
-    public async Task<ContractDocumentDto> GenerateBookingContractAsync(
+    public Task<ContractDocumentDto> GenerateBookingContractAsync(
         ContractGenerationContext context, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -82,19 +63,15 @@ public class ContractService : IContractService
             "Generating booking contract {ContractId}. Deal signature: {DealSignature}",
             context.ContractId, context.BuildDiagnosticSignature());
 
-        var analysis = await ExtractDealAsync(context, cancellationToken);
-        var analysisJson = JsonSerializer.Serialize(analysis, AnalysisEchoOptions);
-
-        _logger.LogDebug(
-            "Contract {ContractId} deal analysis: {ScopeCount} scope items, {DeliverableCount} deliverables, " +
-            "{ClauseCount} clauses planned, {OpenPointCount} open points.",
-            context.ContractId, analysis.ScopeItems.Count, analysis.Deliverables.Count,
-            analysis.RequiredClauses.Count, analysis.OpenPoints.Count);
-
-        var draft = await DraftAndValidateAsync(context, analysisJson, cancellationToken);
+        // Composed deterministically from the platform's own resolved facts - no AI call. See
+        // BuildTemplateDraft's doc comment for why: this used to be a two-to-three-call Gemini
+        // pipeline (extract deal, draft, validate, regenerate on a miss), which made every contract
+        // depend on an external, quota-limited service being reachable at exactly the moment a client
+        // or vendor needed to read it.
+        var draft = BuildTemplateDraft(context);
         var pdfModel = BuildBookingPdfModel(context, draft);
 
-        return await RenderPdfAsync(pdfModel, context.ContractId, "Contract.pdf");
+        return RenderPdfAsync(pdfModel, context.ContractId, "Contract.pdf");
     }
 
     public Task<ContractDocumentDto> GenerateBookingContractAsync(
@@ -105,116 +82,326 @@ public class ContractService : IContractService
     }
 
     /// <summary>
-    /// Stage 1 - read the fact sheet and state what was actually agreed. Drafting straight from raw
-    /// facts is what produces template-shaped output: the model reaches for the shape of contract it
-    /// knows before it has worked out what this particular deal contains. Forcing an explicit reading
-    /// first means the draft argues from these facts.
+    /// Builds the Event Booking Contract's body sections directly from <see cref="ContractGenerationContext"/>
+    /// - the exact same fact sheet the AI pipeline used to be handed - so the document is still specific
+    /// to this transaction (never a generic template with names swapped in) without depending on Gemini.
+    /// Boilerplate clauses that don't vary per booking (the platform's role, each party's general
+    /// responsibilities, dispute resolution, governing law) are fixed text, the same way the Vendor
+    /// Partnership Agreement's clause wording is fixed per vendor rather than re-invented per document.
+    /// Every fact-bearing section skips itself entirely when the context has nothing to say (mirrors
+    /// <see cref="ContractGenerationContext.BuildFactSheet"/>'s own rule): no section here ever prints
+    /// an invented or blank value.
     /// </summary>
-    private async Task<ContractDealAnalysis> ExtractDealAsync(
-        ContractGenerationContext context, CancellationToken cancellationToken)
+    private static ContractDraft BuildTemplateDraft(ContractGenerationContext context)
     {
-        var json = await _geminiService.GenerateTextAsync(new GeminiTextGenerationRequest
-        {
-            SystemInstruction = ContractPrompts.DealAnalysisSystemInstruction,
-            Prompt = ContractPrompts.BuildDealAnalysisPrompt(context),
-            Temperature = DealAnalysisTemperature,
-            MaxOutputTokens = DealAnalysisMaxTokens,
-            ResponseMimeType = "application/json",
-            ResponseSchema = ContractPrompts.DealAnalysisSchema
-        }, cancellationToken);
+        var sections = new List<ContractDraftSection>();
 
-        var analysis = Deserialize<ContractDealAnalysis>(json, context.ContractId, "deal analysis");
+        AddIfAny(sections, BuildScopeOfServiceSection(context));
+        AddIfAny(sections, BuildEventDetailsSection(context));
+        AddIfAny(sections, BuildFinancialTermsSection(context));
+        AddIfAny(sections, BuildClientRequirementsSection(context));
+        AddIfAny(sections, BuildCancellationPolicySection(context));
+        AddIfAny(sections, BuildBookingProcessSection(context));
+        sections.Add(PlatformRoleSection());
+        sections.Add(ResponsibilitiesSection());
+        sections.Add(DisputeResolutionSection());
+        sections.Add(GoverningLawSection(context));
+        AddIfAny(sections, BuildOpenPointsSection(context));
 
-        // The platform's own record of what the client asked for is authoritative; the model's reading
-        // supplements it but must never quietly drop a stated requirement.
-        foreach (var requirement in context.ClientRequirements)
+        return new ContractDraft
         {
-            if (!analysis.ClientRequirements.Any(r => string.Equals(r, requirement, StringComparison.OrdinalIgnoreCase)))
+            Title = "Event Booking Contract",
+            Preamble =
+                "This contract sets out the terms agreed between the Client and the Vendor for the " +
+                "service described below, facilitated through the Planura platform.",
+            Sections = sections
+        };
+    }
+
+    private static void AddIfAny(List<ContractDraftSection> sections, ContractDraftSection? section)
+    {
+        if (section is not null && (section.Paragraphs.Count > 0 || section.Items.Count > 0))
+        {
+            sections.Add(section);
+        }
+    }
+
+    private static ContractDraftSection? BuildScopeOfServiceSection(ContractGenerationContext context)
+    {
+        var section = new ContractDraftSection { Title = "Scope of Services" };
+
+        if (!string.IsNullOrWhiteSpace(context.Service.Category))
+        {
+            section.Paragraphs.Add($"The Vendor will provide services in the category of {context.Service.Category}.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Service.PackageTitle))
+        {
+            var packageLine = $"The Client has selected the Vendor's \"{context.Service.PackageTitle}\" package.";
+            if (!string.IsNullOrWhiteSpace(context.Service.PackageDescription))
             {
-                analysis.ClientRequirements.Add(requirement);
+                packageLine += $" {context.Service.PackageDescription.Trim()}";
+            }
+            section.Paragraphs.Add(packageLine);
+        }
+
+        if (context.Service.InclusionItems.Count > 0)
+        {
+            section.Items.AddRange(context.Service.InclusionItems);
+        }
+        else if (!string.IsNullOrWhiteSpace(context.Service.Inclusions))
+        {
+            section.Paragraphs.Add($"The package includes: {context.Service.Inclusions.Trim()}");
+        }
+
+        if (context.Service.MaxGuests is { } maxGuests)
+        {
+            section.Paragraphs.Add($"This package covers up to {maxGuests} guests.");
+        }
+
+        return section;
+    }
+
+    private static ContractDraftSection? BuildEventDetailsSection(ContractGenerationContext context)
+    {
+        var section = new ContractDraftSection { Title = "Event Details" };
+        var booking = context.Booking;
+
+        var eventLabel = booking.EventType ?? booking.EventTitle;
+        if (!string.IsNullOrWhiteSpace(eventLabel))
+        {
+            section.Paragraphs.Add($"This contract concerns a {eventLabel} event.");
+        }
+
+        if (booking.EventDate is { } eventDate)
+        {
+            var when = eventDate.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+            if (booking.StartAt is { } start && booking.EndAt is { } end)
+            {
+                when +=
+                    $", from {start.ToString("HH:mm 'UTC'", CultureInfo.InvariantCulture)} to " +
+                    $"{end.ToString("HH:mm 'UTC'", CultureInfo.InvariantCulture)}";
+            }
+            section.Paragraphs.Add($"The event is scheduled for {when}.");
+        }
+
+        var location = booking.LocationDetail ?? booking.City;
+        if (!string.IsNullOrWhiteSpace(location))
+        {
+            section.Paragraphs.Add($"The service will be performed at: {location}.");
+        }
+
+        if (booking.GuestCount is { } guests)
+        {
+            section.Paragraphs.Add($"The event is expected to have {guests} guests.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(booking.StyleNotes))
+        {
+            section.Paragraphs.Add($"Style and preference notes recorded on the event plan: {booking.StyleNotes.Trim()}");
+        }
+
+        return section;
+    }
+
+    private static ContractDraftSection? BuildFinancialTermsSection(ContractGenerationContext context)
+    {
+        var section = new ContractDraftSection { Title = "Financial Terms" };
+        var financials = context.Financials;
+
+        if (financials.TotalAmount is { } total)
+        {
+            section.Paragraphs.Add(
+                $"The total agreed contract amount is {Money(total)} {context.Currency}.");
+        }
+
+        if (financials.IsDepositSchedule == true)
+        {
+            var depositLine = "The Client pays a deposit at booking, with the remaining balance due later.";
+            if (financials.DepositAmount is { } deposit)
+            {
+                depositLine +=
+                    $" Deposit payable now: {Money(deposit)} {context.Currency}" +
+                    (financials.DepositPercentage is { } pct
+                        ? $" ({pct.ToString("0.##", CultureInfo.InvariantCulture)}% of the total)."
+                        : ".");
+            }
+            section.Paragraphs.Add(depositLine);
+
+            if (financials.RemainderAmount is { } remainder)
+            {
+                var remainderLine = $"Remaining balance: {Money(remainder)} {context.Currency}.";
+                if (financials.RemainderDueDate is { } due)
+                {
+                    remainderLine += $" Due by {due.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture)}.";
+                }
+                section.Paragraphs.Add(remainderLine);
+            }
+        }
+        else if (financials.IsDepositSchedule == false)
+        {
+            section.Paragraphs.Add("The full contract amount is payable at booking.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(financials.PaymentMechanism))
+        {
+            section.Paragraphs.Add($"Payment mechanism: {financials.PaymentMechanism.Trim()}.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(financials.SettlementTerms))
+        {
+            section.Paragraphs.Add($"Settlement to the Vendor: {financials.SettlementTerms.Trim()}.");
+        }
+
+        return section;
+    }
+
+    private static ContractDraftSection? BuildClientRequirementsSection(ContractGenerationContext context)
+    {
+        if (context.ClientRequirements.Count == 0 && string.IsNullOrWhiteSpace(context.ClientNote))
+        {
+            return null;
+        }
+
+        var section = new ContractDraftSection { Title = "Client Requirements" };
+        section.Items.AddRange(context.ClientRequirements.Where(r => !string.IsNullOrWhiteSpace(r)));
+
+        if (!string.IsNullOrWhiteSpace(context.ClientNote))
+        {
+            section.Paragraphs.Add($"Additional note from the Client: {context.ClientNote.Trim()}");
+        }
+
+        return section;
+    }
+
+    private static ContractDraftSection? BuildCancellationPolicySection(ContractGenerationContext context)
+    {
+        var policies = context.Policies;
+        if (policies.CancellationTiers.Count == 0)
+        {
+            return null;
+        }
+
+        var section = new ContractDraftSection { Title = "Cancellation and Refund Policy" };
+
+        foreach (var tier in policies.CancellationTiers.OrderByDescending(t => t.MinDaysBefore))
+        {
+            section.Items.Add(tier.MinDaysBefore > 0
+                ? $"Cancelled {tier.MinDaysBefore} or more days before the event date: " +
+                  $"{tier.RefundPercent.ToString("0.##", CultureInfo.InvariantCulture)}% of the amount paid is refunded."
+                : $"Cancelled fewer days before the event than any tier above: " +
+                  $"{tier.RefundPercent.ToString("0.##", CultureInfo.InvariantCulture)}% of the amount paid is refunded.");
+        }
+
+        if (policies.CancellationRequiresPlatformReview)
+        {
+            section.Paragraphs.Add(
+                "A Client request to cancel an accepted booking is reviewed by Planura before the refund is settled.");
+        }
+
+        return section;
+    }
+
+    private static ContractDraftSection? BuildBookingProcessSection(ContractGenerationContext context)
+    {
+        var policies = context.Policies;
+        var section = new ContractDraftSection { Title = "Booking Process and Timelines" };
+
+        if (policies.VendorResponseWindowHours is { } window)
+        {
+            section.Paragraphs.Add(
+                $"The Vendor has {window} hours from submission to accept this booking before the reserved slot is released.");
+        }
+
+        if (context.Financials.IsDepositSchedule == true)
+        {
+            if (policies.RemainderChargeLeadDays is { } leadDays)
+            {
+                section.Paragraphs.Add($"The remaining balance is charged {leadDays} days before the event date.");
+            }
+
+            if (policies.GracePeriodDays is { } grace)
+            {
+                section.Paragraphs.Add($"If that charge fails, the Client has a grace period of {grace} days to resolve it.");
             }
         }
 
-        return analysis;
+        if (policies.AutoConfirmAfterDays is { } autoConfirm)
+        {
+            section.Paragraphs.Add(
+                $"{autoConfirm} days after the service ends, the booking is treated as completed if the Client " +
+                "neither confirms delivery nor reports a problem.");
+        }
+
+        return section;
     }
 
-    /// <summary>
-    /// Stage 2 - draft, then check the draft against the facts. One targeted regeneration is allowed,
-    /// naming exactly what was missed. A draft still missing a critical fact after that is refused
-    /// rather than shown to a client about to pay against it.
-    /// </summary>
-    private async Task<ContractDraft> DraftAndValidateAsync(
-        ContractGenerationContext context, string analysisJson, CancellationToken cancellationToken)
+    private static ContractDraftSection PlatformRoleSection() => new()
     {
-        var draft = await DraftAsync(
-            context, ContractPrompts.BuildContractDraftingPrompt(context, analysisJson), cancellationToken);
-
-        var validation = ContractFactValidator.Validate(context, draft);
-        if (validation.IsValid)
+        Title = "Role of the Platform",
+        Paragraphs =
         {
-            return draft;
+            "Planura operates the online marketplace connecting the Client and the Vendor, and " +
+            "facilitates the booking, payment processing, and contract generation for this " +
+            "transaction. Planura is not itself the provider of the service described above and " +
+            "does not guarantee its outcome, quality, or delivery beyond the platform mechanisms " +
+            "described in this contract."
         }
+    };
 
-        _logger.LogWarning(
-            "Contract {ContractId} draft omitted {MissingCount} source fact(s); regenerating once. Missing: {MissingFacts}",
-            context.ContractId, validation.AllMissing.Count, string.Join("; ", validation.AllMissing));
-
-        var repaired = await DraftAsync(
-            context,
-            ContractPrompts.BuildFactRepairPrompt(context, analysisJson, validation.AllMissing),
-            cancellationToken);
-
-        var revalidation = ContractFactValidator.Validate(context, repaired);
-
-        if (revalidation.MissingCritical.Count > 0)
-        {
-            _logger.LogError(
-                "Contract {ContractId} failed fact validation after regeneration. Missing critical facts: {MissingFacts}",
-                context.ContractId, string.Join("; ", revalidation.MissingCritical));
-
-            throw new BadRequestExeption(
-                "The contract could not be generated accurately from this booking's details. Please try again.");
-        }
-
-        if (revalidation.MissingImportant.Count > 0)
-        {
-            // Not worth blocking a booking over, but it must be visible: a recurring entry here means
-            // a fact is reaching the prompt in a form the model keeps declining to use.
-            _logger.LogWarning(
-                "Contract {ContractId} generated with {MissingCount} unstated non-critical fact(s): {MissingFacts}",
-                context.ContractId, revalidation.MissingImportant.Count, string.Join("; ", revalidation.MissingImportant));
-        }
-
-        return repaired;
-    }
-
-    private async Task<ContractDraft> DraftAsync(
-        ContractGenerationContext context, string prompt, CancellationToken cancellationToken)
+    private static ContractDraftSection ResponsibilitiesSection() => new()
     {
-        var json = await _geminiService.GenerateTextAsync(new GeminiTextGenerationRequest
+        Title = "Vendor and Client Responsibilities",
+        Paragraphs =
         {
-            SystemInstruction = ContractPrompts.ContractDraftingSystemInstruction,
-            Prompt = prompt,
-            Temperature = ContractDraftTemperature,
-            MaxOutputTokens = ContractDraftMaxTokens,
-            ResponseMimeType = "application/json",
-            ResponseSchema = ContractPrompts.ContractDraftSchema
-        }, cancellationToken);
+            "The Vendor is solely responsible for delivering the service described in this " +
+            "contract to the standard represented on the Planura platform, including any " +
+            "necessary licenses, permits, insurance, and staffing.",
+            "The Client is responsible for providing accurate event details, timely access to the " +
+            "event location, and any information reasonably required by the Vendor to deliver the " +
+            "service."
+        }
+    };
 
-        var draft = Deserialize<ContractDraft>(json, context.ContractId, "contract draft");
-
-        draft.Sections = draft.Sections
-            .Where(s => !string.IsNullOrWhiteSpace(s.Title) && (s.Paragraphs.Count > 0 || s.Items.Count > 0))
-            .ToList();
-
-        if (draft.Sections.Count == 0)
+    private static ContractDraftSection DisputeResolutionSection() => new()
+    {
+        Title = "Dispute Resolution",
+        Paragraphs =
         {
-            throw new AiProviderUnavailableExeption(
-                "The AI assistant returned an empty document. Please try again.");
+            "Either party may report a problem with this booking through the Planura platform. " +
+            "Planura will review the report and may adjust the booking's status, payment, or " +
+            "refund in accordance with its published policies. This does not limit either party's " +
+            "other legal rights."
+        }
+    };
+
+    private static ContractDraftSection GoverningLawSection(ContractGenerationContext context) => new()
+    {
+        Title = "Governing Law",
+        Paragraphs = { $"This contract is governed by the laws of {context.GoverningLaw}." }
+    };
+
+    private static ContractDraftSection? BuildOpenPointsSection(ContractGenerationContext context)
+    {
+        var unknowns = context.BuildUnknownFactSheet();
+        if (unknowns.Count == 0)
+        {
+            return null;
         }
 
-        return draft;
+        return new ContractDraftSection
+        {
+            Title = "Open Points Requiring Agreement",
+            Paragraphs =
+            {
+                "The following details were not yet recorded on the Planura platform when this " +
+                "contract was generated and must be agreed between the parties directly:"
+            },
+            Items = unknowns.ToList()
+        };
     }
+
+    private static string Money(decimal amount) => amount.ToString("N2", CultureInfo.InvariantCulture);
 
     private ContractPdfModel BuildBookingPdfModel(ContractGenerationContext context, ContractDraft draft)
     {
@@ -552,27 +739,6 @@ public class ContractService : IContractService
         return text;
     }
 
-    private T Deserialize<T>(string json, string contractId, string stage) where T : new()
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json, JsonOptions)
-                   ?? throw new AiProviderUnavailableExeption(
-                       "The AI assistant returned an empty document. Please try again.");
-        }
-        catch (JsonException ex)
-        {
-            // The response is schema-constrained, so this should not happen; if it does, the payload
-            // itself is the only useful clue and belongs in the log, not in the user-facing message.
-            _logger.LogError(ex,
-                "Contract {ContractId}: could not parse the {Stage} response as JSON. Raw response: {RawResponse}",
-                contractId, stage, Truncate(json, 4000));
-
-            throw new AiProviderUnavailableExeption(
-                "The AI assistant returned an unreadable response. Please try again.");
-        }
-    }
-
     private Task<ContractDocumentDto> RenderPdfAsync(ContractPdfModel pdfModel, string contractId, string fileName)
     {
         byte[] pdfBytes;
@@ -606,9 +772,6 @@ public class ContractService : IContractService
 
         return $"PLN-{typeCode}-{DateTime.UtcNow:yyyyMMdd}-{new string(suffix)}";
     }
-
-    private static string Truncate(string value, int max) =>
-        string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..max] + "…";
 
     private static string N(string? value) => string.IsNullOrWhiteSpace(value) ? "N/A" : value.Trim();
 }

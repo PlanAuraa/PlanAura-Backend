@@ -28,7 +28,6 @@ public class BookingService : IBookingService
     private const int UniqueIndexViolationNumber = 2627;
 
     private const string BookingContractsFolder = "booking-contracts";
-    private const string VendorPartnershipAgreementsFolder = "vendor-partnership-agreements";
 
     private static readonly JsonSerializerOptions NotificationDataJsonOptions = new()
     {
@@ -1954,10 +1953,10 @@ public class BookingService : IBookingService
 
     /// <summary>
     /// Side effects that follow a vendor accepting (confirming) a booking: notify the client and vendor
-    /// that the booking is confirmed (surfacing the Event Booking Contract that was generated and agreed
-    /// at the payment step and is already attached to the booking), and draft + store the Vendor/Planura
-    /// Partnership Agreement exactly once per vendor. Every step here is best-effort — the booking is
-    /// already Accepted/Paid by the time this runs, so nothing in here is allowed to throw to the caller.
+    /// that the booking is confirmed, surfacing the Event Booking Contract that was generated and agreed
+    /// at the payment step and is already attached to the booking. Every step here is best-effort — the
+    /// booking is already Accepted/Paid by the time this runs, so nothing in here is allowed to throw to
+    /// the caller.
     /// </summary>
     private async Task ProcessAcceptedBookingAsync(BookingRequest booking, Client? client, long vendorUserId)
     {
@@ -1966,8 +1965,6 @@ public class BookingService : IBookingService
         {
             return;
         }
-
-        var vendorUser = await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(vendor.UserId);
 
         // The Event Booking Contract was drafted and agreed at the payment step and copied onto the
         // booking at creation, so it's simply surfaced here — never regenerated on accept.
@@ -2018,81 +2015,6 @@ public class BookingService : IBookingService
                 "Booking confirmed successfully",
                 $"The booking for {booking.EventDate:d} is confirmed.",
                 BuildDataJson(new { bookingId = booking.Id })));
-        }
-
-        if (vendor is not null && vendorUser is not null && string.IsNullOrWhiteSpace(vendor.PartnershipAgreementUrl))
-        {
-            var agreementUrl = await GenerateVendorPartnershipBestEffortAsync(vendor, vendorUser, booking.Id);
-
-            if (agreementUrl is not null)
-            {
-                await NotifyBestEffortAsync(() => _notificationService.NotifyUserAsync(
-                    vendorUserId,
-                    NotificationTypes.PartnershipAgreementGenerated,
-                    "Partnership agreement generated",
-                    "Your Partnership Agreement with Planura has been generated and is awaiting admin review.",
-                    BuildDataJson(new { vendorId = vendor.Id, agreementUrl })));
-
-                await NotifyBestEffortAsync(() => _notificationService.NotifyRoleAsync(
-                    Roles.Admin,
-                    NotificationTypes.PartnershipAgreementPendingReview,
-                    "A new Vendor Partnership Agreement requires review",
-                    $"{vendor.BusinessName} now has a new Partnership Agreement awaiting review.",
-                    BuildDataJson(new
-                    {
-                        vendorId = vendor.Id,
-                        vendorName = vendor.BusinessName,
-                        bookingId = booking.Id,
-                        generatedAt = vendor.PartnershipAgreementGeneratedAt,
-                        agreementUrl
-                    })));
-            }
-        }
-    }
-
-    /// <summary>Drafts and stores the Vendor Partnership Agreement PDF. Returns the absolute download URL, or null on any failure.</summary>
-    private async Task<string?> GenerateVendorPartnershipBestEffortAsync(Vendor vendor, ApplicationUser vendorUser, long triggeringBookingId)
-    {
-        try
-        {
-            string? categoryName = null;
-            if (vendor.CategoryId is not null)
-            {
-                var category = await _unitOfWork.Repository<ServiceCategory, long>().GetAsync(vendor.CategoryId.Value);
-                categoryName = category?.NameEn;
-            }
-
-            var partnershipDto = new GenerateVendorPartnershipDto
-            {
-                VendorName = vendor.BusinessName,
-                VendorEmail = vendorUser.Email,
-                VendorPhone = vendorUser.PhoneNumber,
-                VendorAddress = string.IsNullOrWhiteSpace(vendor.Address) ? vendor.City : vendor.Address,
-                VendorRepresentativeName = vendorUser.FullName,
-                VendorCategory = categoryName,
-                VendorCity = vendor.City,
-                EffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow)
-            };
-
-            var document = await _contractService.GenerateVendorPartnershipContractAsync(partnershipDto);
-            var relativeUrl = await _attachmentService.UploadGeneratedFileAsync(document.Content, document.FileName, VendorPartnershipAgreementsFolder);
-
-            vendor.PartnershipAgreementId = document.ContractId;
-            vendor.PartnershipAgreementUrl = relativeUrl;
-            vendor.PartnershipAgreementGeneratedAt = DateTimeOffset.UtcNow;
-            vendor.UpdatedAt = DateTimeOffset.UtcNow;
-
-            _unitOfWork.Repository<Vendor, long>().Update(vendor);
-            await _unitOfWork.SaveChangesAsync();
-
-            return _attachmentService.ToAbsoluteUrl(relativeUrl);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Failed to generate the Vendor Partnership Agreement for vendor {VendorId} (triggered by booking {BookingId}).",
-                vendor.Id, triggeringBookingId);
-            return null;
         }
     }
 

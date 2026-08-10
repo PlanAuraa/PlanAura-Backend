@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -8,23 +7,21 @@ using Planura.Core.Application.Models;
 using Planura.Core.Application.Services.Contract;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
-using Planura.Shared.Errors.Models;
 using Xunit;
 
 namespace Planura.Tests.Services;
 
 /// <summary>
 /// Guards the property that motivated the contract-generation redesign: the document must be a
-/// function of THIS transaction. Because the AI itself is mocked here, these tests assert on what
-/// actually reaches it - the fact sheet built from the booking - plus the validation that runs on what
-/// comes back. That is precisely where the old implementation failed: it sent roughly a dozen fields,
-/// none of which described the service being bought, so every contract came back generic.
+/// function of THIS transaction, not a generic template with names swapped in. The booking contract
+/// is composed deterministically (see ContractService.BuildTemplateDraft) rather than by an AI call,
+/// so these tests assert directly on the fact sheet that feeds it and on the rendered
+/// sections/summary the template produces from real booking data - no Gemini mock needed.
 /// </summary>
 public class ContractGenerationTests
 {
     private readonly Mock<IGeminiService> _geminiMock = new();
     private readonly Mock<IPdfService> _pdfMock = new();
-    private readonly List<GeminiTextGenerationRequest> _requests = new();
 
     public ContractGenerationTests()
     {
@@ -33,72 +30,6 @@ public class ContractGenerationTests
 
     private ContractService CreateService() =>
         new(_geminiMock.Object, _pdfMock.Object, NullLogger<ContractService>.Instance);
-
-    /// <summary>Records every prompt sent, and answers analysis/draft calls with schema-valid stubs.</summary>
-    private void SetupGemini(Func<int, string>? draftFactory = null)
-    {
-        var draftCall = 0;
-
-        _geminiMock
-            .Setup(g => g.GenerateTextAsync(It.IsAny<GeminiTextGenerationRequest>(), It.IsAny<CancellationToken>()))
-            .Returns((GeminiTextGenerationRequest request, CancellationToken _) =>
-            {
-                _requests.Add(request);
-
-                // The analysis stage is the one whose system instruction talks about extracting the deal.
-                var isAnalysis = request.SystemInstruction.Contains("contracts analyst", StringComparison.OrdinalIgnoreCase);
-                if (isAnalysis)
-                {
-                    return Task.FromResult(EmptyAnalysisJson);
-                }
-
-                var response = draftFactory is null
-                    ? CompleteDraftJson(_requests[^1].Prompt)
-                    : draftFactory(draftCall);
-                draftCall++;
-                return Task.FromResult(response);
-            });
-    }
-
-    private static string EmptyAnalysisJson => JsonSerializer.Serialize(new ContractDealAnalysis
-    {
-        ServiceSummary = "Summary",
-        ScopeItems = new List<string> { "Scope" },
-        Deliverables = new List<string> { "Deliverable" },
-        VendorCommitments = new List<string> { "Commitment" },
-        ClientObligations = new List<string> { "Obligation" },
-        FinancialTerms = new List<string> { "Term" },
-        RequiredClauses = new List<ContractClausePlan> { new() { Title = "Scope", Reason = "Because" } }
-    });
-
-    /// <summary>
-    /// A draft that echoes the whole prompt back into a clause. Artificial, but it means every source
-    /// fact is present, so validation passes and the test isolates what it means to isolate.
-    /// </summary>
-    private static string CompleteDraftJson(string prompt) => JsonSerializer.Serialize(new ContractDraft
-    {
-        Title = "Event Booking Contract",
-        Preamble = "Preamble.",
-        Sections = new List<ContractDraftSection>
-        {
-            new() { Title = "Scope of Services", Paragraphs = new List<string> { prompt } }
-        }
-    });
-
-    /// <summary>A draft that mentions nobody and no amount - the failure mode validation must catch.</summary>
-    private static string HollowDraftJson => JsonSerializer.Serialize(new ContractDraft
-    {
-        Title = "Event Booking Contract",
-        Preamble = "The parties agree as follows.",
-        Sections = new List<ContractDraftSection>
-        {
-            new()
-            {
-                Title = "Scope of Services",
-                Paragraphs = new List<string> { "The vendor shall provide services to the client as agreed." }
-            }
-        }
-    });
 
     // ---------------------------------------------------------------- Scenario fixtures
 
@@ -255,14 +186,14 @@ public class ContractGenerationTests
         };
     }
 
-    // ---------------------------------------------------------------- Acceptance criteria
+    // ---------------------------------------------------------------- Fact sheet (unaffected by the
+    // template-vs-AI drafting choice - this is the shared input both approaches read from)
 
     [Fact]
     public void FactSheet_CarriesTheServiceBeingBought_NotJustNamesAndPrice()
     {
         var sheet = Factory().Create(PhotographyBooking()).BuildFactSheet();
 
-        // Everything below existed in the database before this change and none of it reached the AI.
         Assert.Contains("Photography", sheet);
         Assert.Contains("Signature Wedding Day", sheet);
         Assert.Contains("500 edited photographs", sheet);
@@ -278,7 +209,6 @@ public class ContractGenerationTests
         var photography = Factory().Create(PhotographyBooking()).BuildFactSheet();
         var catering = Factory().Create(CateringBooking()).BuildFactSheet();
 
-        // Not merely different names and numbers: each carries scope the other has no concept of.
         Assert.Contains("500 edited photographs", photography);
         Assert.DoesNotContain("500 edited photographs", catering);
 
@@ -324,49 +254,81 @@ public class ContractGenerationTests
         var context = Factory().Create(PlanningBooking());
         var sheet = context.BuildFactSheet();
 
-        // No labelled blanks the model could feel invited to fill in.
         Assert.DoesNotContain("N/A", sheet);
         Assert.DoesNotContain("Style and preference notes", sheet);
         Assert.DoesNotContain("Guest count for this booking", sheet);
 
-        // And the gaps are surfaced explicitly as things the parties must still agree.
         var unknowns = context.BuildUnknownFactSheet();
         Assert.Contains(unknowns, u => u.Contains("guests", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(unknowns, u => u.Contains("includes", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task ThreeDifferentBookings_SendThreeMateriallyDifferentPromptsToTheAi()
+    public void DiagnosticSignature_DistinguishesBookings_WithoutLeakingPersonalData()
     {
-        SetupGemini();
+        var factory = Factory();
+        var photography = factory.Create(PhotographyBooking()).BuildDiagnosticSignature();
+        var catering = factory.Create(CateringBooking()).BuildDiagnosticSignature();
+
+        Assert.NotEqual(photography, catering);
+        Assert.Contains("category=Photography", photography);
+        Assert.DoesNotContain("Mariam Hassan", photography);
+        Assert.DoesNotContain("mariam@example.com", photography);
+    }
+
+    // ---------------------------------------------------------------- Template generation
+
+    [Fact]
+    public async Task GenerateBookingContractAsync_NeverCallsGemini()
+    {
+        var service = CreateService();
+        await service.GenerateBookingContractAsync(Factory().Create(PhotographyBooking()));
+
+        _geminiMock.Verify(
+            g => g.GenerateTextAsync(It.IsAny<GeminiTextGenerationRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ThreeDifferentBookings_ProduceThreeMateriallyDifferentContracts()
+    {
         var service = CreateService();
         var factory = Factory();
+
+        var captured = new List<ContractPdfModel>();
+        _pdfMock.Setup(p => p.GenerateContractPdf(It.IsAny<ContractPdfModel>()))
+            .Callback<ContractPdfModel>(captured.Add)
+            .Returns(new byte[] { 1 });
 
         await service.GenerateBookingContractAsync(factory.Create(PhotographyBooking()));
         await service.GenerateBookingContractAsync(factory.Create(CateringBooking()));
         await service.GenerateBookingContractAsync(factory.Create(PlanningBooking()));
 
-        // Two Gemini calls per contract (analysis + draft), none of them repaired.
-        Assert.Equal(6, _requests.Count);
+        Assert.Equal(3, captured.Count);
 
-        var drafts = _requests.Where(r => r.SystemInstruction.Contains("contracts lawyer")).Select(r => r.Prompt).ToList();
-        Assert.Equal(3, drafts.Count);
-        Assert.Equal(3, drafts.Distinct().Count());
+        string AllText(ContractPdfModel m) =>
+            string.Join(" ", m.Sections.SelectMany(s => s.Paragraphs.Concat(s.Items)));
 
-        Assert.Contains("Photography", drafts[0]);
-        Assert.Contains("Catering", drafts[1]);
-        Assert.Contains("Event Planning", drafts[2]);
+        var photography = AllText(captured[0]);
+        var catering = AllText(captured[1]);
+        var planning = AllText(captured[2]);
 
-        // Scope from one booking must never appear in another's prompt.
-        Assert.DoesNotContain("500 edited photographs", drafts[1]);
-        Assert.DoesNotContain("gluten-free", drafts[2]);
-        Assert.DoesNotContain("Table Nine Catering", drafts[0]);
+        // Scope from one booking must never appear in another's contract.
+        Assert.Contains("500 edited photographs", photography);
+        Assert.DoesNotContain("500 edited photographs", catering);
+        Assert.DoesNotContain("500 edited photographs", planning);
+
+        Assert.Contains("gluten-free", catering);
+        Assert.DoesNotContain("gluten-free", photography);
+
+        Assert.Contains("Photography", photography);
+        Assert.Contains("Catering", catering);
+        Assert.Contains("Event Planning", planning);
     }
 
     [Fact]
-    public async Task SameClientAndVendor_DifferentBookings_ProduceDifferentPrompts()
+    public async Task SameClientAndVendor_DifferentBookings_ProduceDifferentContracts()
     {
-        SetupGemini();
         var service = CreateService();
         var factory = Factory();
 
@@ -375,8 +337,8 @@ public class ContractGenerationTests
         var secondDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(120));
         var secondStart = new DateTimeOffset(secondDate.ToDateTime(new TimeOnly(10, 0)), TimeSpan.Zero);
 
-        // Same two parties, a different package and slot — the case where the old implementation
-        // produced near-identical documents.
+        // Same two parties, a different package and slot — the case where a generic template would
+        // have produced near-identical documents.
         var second = new BookingContractInput
         {
             Client = first.Client,
@@ -402,50 +364,25 @@ public class ContractGenerationTests
             DepositAmount = 1800m
         };
 
+        var captured = new List<ContractPdfModel>();
+        _pdfMock.Setup(p => p.GenerateContractPdf(It.IsAny<ContractPdfModel>()))
+            .Callback<ContractPdfModel>(captured.Add)
+            .Returns(new byte[] { 1 });
+
         await service.GenerateBookingContractAsync(factory.Create(first));
         await service.GenerateBookingContractAsync(factory.Create(second));
 
-        var drafts = _requests.Where(r => r.SystemInstruction.Contains("contracts lawyer")).Select(r => r.Prompt).ToList();
+        string AllText(ContractPdfModel m) =>
+            string.Join(" ", m.Sections.SelectMany(s => s.Paragraphs.Concat(s.Items)));
 
-        Assert.Contains("500 edited photographs", drafts[0]);
-        Assert.Contains("120 edited photographs", drafts[1]);
-        Assert.DoesNotContain("500 edited photographs", drafts[1]);
+        Assert.Contains("500 edited photographs", AllText(captured[0]));
+        Assert.Contains("120 edited photographs", AllText(captured[1]));
+        Assert.DoesNotContain("500 edited photographs", AllText(captured[1]));
     }
 
     [Fact]
-    public async Task Draft_MissingMaterialFacts_IsRegeneratedWithThoseFactsNamed()
+    public async Task GeneratedContract_IsRenderedFromStructuredSections()
     {
-        // First draft omits everything; second echoes the prompt back and therefore contains it all.
-        SetupGemini(call => call == 0 ? HollowDraftJson : CompleteDraftJson(_requests[^1].Prompt));
-
-        var service = CreateService();
-        await service.GenerateBookingContractAsync(Factory().Create(PhotographyBooking()));
-
-        var drafts = _requests.Where(r => r.SystemInstruction.Contains("contracts lawyer")).ToList();
-        Assert.Equal(2, drafts.Count);
-
-        var repair = drafts[1].Prompt;
-        Assert.Contains("MANDATORY CORRECTION", repair);
-        Assert.Contains("Mariam Hassan", repair);
-        Assert.Contains("25,000.00", repair);
-    }
-
-    [Fact]
-    public async Task Draft_StillMissingTheDealItself_IsRefusedRatherThanIssued()
-    {
-        SetupGemini(_ => HollowDraftJson);
-        var service = CreateService();
-
-        await Assert.ThrowsAsync<BadRequestExeption>(
-            () => service.GenerateBookingContractAsync(Factory().Create(PhotographyBooking())));
-
-        _pdfMock.Verify(p => p.GenerateContractPdf(It.IsAny<ContractPdfModel>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task GeneratedContract_IsRenderedFromStructuredClauses_NotParsedProse()
-    {
-        SetupGemini();
         ContractPdfModel? captured = null;
         _pdfMock.Setup(p => p.GenerateContractPdf(It.IsAny<ContractPdfModel>()))
             .Callback<ContractPdfModel>(m => captured = m)
@@ -458,6 +395,10 @@ public class ContractGenerationTests
         Assert.NotEmpty(captured!.Sections);
         Assert.Equal("Scope of Services", captured.Sections[0].Title);
 
+        // Fixed boilerplate clauses are always present, regardless of booking specifics.
+        Assert.Contains(captured.Sections, s => s.Title == "Role of the Platform");
+        Assert.Contains(captured.Sections, s => s.Title == "Governing Law");
+
         // Cover facts are built server-side from the context, so they cannot drift from the booking.
         Assert.Contains(captured.SummaryItems, i => i.Label == "Package" && i.Value == "Signature Wedding Day");
         Assert.Contains(captured.SummaryItems, i => i.Label == "Deposit Now");
@@ -465,29 +406,26 @@ public class ContractGenerationTests
     }
 
     [Fact]
-    public async Task EveryGeneration_RequestsSchemaConstrainedJson()
+    public async Task SparseBooking_OmitsSectionsWithNothingToSay_RatherThanInventingContent()
     {
-        SetupGemini();
+        ContractPdfModel? captured = null;
+        _pdfMock.Setup(p => p.GenerateContractPdf(It.IsAny<ContractPdfModel>()))
+            .Callback<ContractPdfModel>(m => captured = m)
+            .Returns(new byte[] { 1 });
+
+        // No cancellation tiers configured, so that section is exercised as absent too — the default
+        // BookingOptions() ships four tiers, which would otherwise mask this behavior.
         var service = CreateService();
-        await service.GenerateBookingContractAsync(Factory().Create(CateringBooking()));
+        await service.GenerateBookingContractAsync(
+            Factory(new BookingOptions { CancellationTiers = [] }).Create(PlanningBooking()));
 
-        Assert.All(_requests, r =>
-        {
-            Assert.Equal("application/json", r.ResponseMimeType);
-            Assert.NotNull(r.ResponseSchema);
-        });
-    }
+        Assert.NotNull(captured);
 
-    [Fact]
-    public void DiagnosticSignature_DistinguishesBookings_WithoutLeakingPersonalData()
-    {
-        var factory = Factory();
-        var photography = factory.Create(PhotographyBooking()).BuildDiagnosticSignature();
-        var catering = factory.Create(CateringBooking()).BuildDiagnosticSignature();
+        // No client requirements/note were given, so that section must not appear at all.
+        Assert.DoesNotContain(captured!.Sections, s => s.Title == "Client Requirements");
+        Assert.DoesNotContain(captured.Sections, s => s.Title == "Cancellation and Refund Policy");
 
-        Assert.NotEqual(photography, catering);
-        Assert.Contains("category=Photography", photography);
-        Assert.DoesNotContain("Mariam Hassan", photography);
-        Assert.DoesNotContain("mariam@example.com", photography);
+        // But the gaps the AI-repair path used to chase down are still surfaced explicitly.
+        Assert.Contains(captured.Sections, s => s.Title == "Open Points Requiring Agreement");
     }
 }

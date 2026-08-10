@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Planura.Core.Application.Abstraction.Contract;
 using QuestPDF.Fluent;
@@ -243,7 +244,7 @@ namespace Planura.Infrastructure.Contract
                             row.RelativeItem().Column(c =>
                             {
                                 c.Item().AlignRight().Text("GENERATED ON").FontSize(8.5f).Bold().FontColor(Palette.Secondary);
-                                c.Item().AlignRight().Text($"{_model.GeneratedDate:MMMM d, yyyy}").FontSize(13).Bold().FontColor(Palette.Charcoal);
+                                c.Item().AlignRight().Text(_model.GeneratedDate.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture)).FontSize(13).Bold().FontColor(Palette.Charcoal);
                             });
                         });
 
@@ -357,7 +358,7 @@ namespace Planura.Infrastructure.Contract
                         row.ConstantItem(180).Column(c =>
                         {
                             c.Item().AlignRight().Text($"Contract ID: {_model.ContractId}").FontSize(8).FontColor(Palette.Secondary);
-                            c.Item().AlignRight().Text($"Generated: {_model.GeneratedDate:MMM d, yyyy}").FontSize(8).FontColor(Palette.Secondary);
+                            c.Item().AlignRight().Text($"Generated: {_model.GeneratedDate.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)}").FontSize(8).FontColor(Palette.Secondary);
                         });
                     });
 
