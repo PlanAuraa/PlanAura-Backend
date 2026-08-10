@@ -34,4 +34,7 @@ public static class NotificationTypes
     public const string RemainderPaid = "remainder_paid";
     public const string RemainderFailed = "remainder_failed";
     public const string RemainderPaymentReminder = "remainder_payment_reminder";
+
+    /// <summary>New message on a booking's client/vendor chat thread (unlocked once the vendor accepts).</summary>
+    public const string NewChatMessage = "booking_chat_message";
 }

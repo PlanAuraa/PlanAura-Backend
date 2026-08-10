@@ -68,5 +68,6 @@ public class BookingRequest
     public ICollection<VendorAvailability> VendorAvailability { get; set; } = new List<VendorAvailability>();
     public ICollection<BookingStatusHistory> StatusHistory { get; set; } = new List<BookingStatusHistory>();
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
+    public ICollection<BookingChatMessage> ChatMessages { get; set; } = new List<BookingChatMessage>();
     public Review? Review { get; set; }
 }

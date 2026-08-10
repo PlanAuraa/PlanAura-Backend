@@ -74,4 +74,24 @@ public class VendorBookingRequestsController : ControllerBase
         var result = await _bookingService.RejectBookingRequestAsync(id, CurrentUserId, dto.Reason);
         return Ok(result);
     }
+
+    /// <summary>
+    /// Sends a message on this booking's client/vendor chat thread. Routed under incoming/ for the same
+    /// reason as Dispute above: this controller shares the api/booking-requests prefix with
+    /// BookingRequestsController, whose {id}/messages is the client's equivalent action.
+    /// </summary>
+    [HttpPost("incoming/{id:long}/messages")]
+    public async Task<ActionResult<BookingChatMessageDto>> SendMessage(long id, [FromBody] SendBookingChatMessageDto dto)
+    {
+        var result = await _bookingService.SendChatMessageAsync(id, CurrentUserId, dto);
+        return Ok(result);
+    }
+
+    /// <summary>Lists this booking's chat messages, oldest first. Pass afterId to poll for only new ones.</summary>
+    [HttpGet("incoming/{id:long}/messages")]
+    public async Task<ActionResult<IEnumerable<BookingChatMessageDto>>> GetMessages(long id, [FromQuery] long? afterId)
+    {
+        var result = await _bookingService.GetChatMessagesAsync(id, CurrentUserId, afterId);
+        return Ok(result);
+    }
 }

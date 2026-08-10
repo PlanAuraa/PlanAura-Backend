@@ -96,3 +96,27 @@ public class BookingStatusHistoryConfiguration : IEntityTypeConfiguration<Bookin
             .OnDelete(DeleteBehavior.SetNull);
     }
 }
+
+public class BookingChatMessageConfiguration : IEntityTypeConfiguration<BookingChatMessage>
+{
+    public void Configure(EntityTypeBuilder<BookingChatMessage> builder)
+    {
+        builder.Property(message => message.Content).HasMaxLength(2000).IsRequired();
+        builder.Property(message => message.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+
+        builder.HasIndex(message => new { message.BookingRequestId, message.CreatedAt });
+
+        builder.HasOne(message => message.BookingRequest)
+            .WithMany(booking => booking.ChatMessages)
+            .HasForeignKey(message => message.BookingRequestId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Restrict, not Cascade/SetNull: SenderUserId is required (a message always has a sender),
+        // and ApplicationUser rows are never hard-deleted in this app (suspension flips IsActive) —
+        // same reasoning as BookingRequest's DisputedByUser/ResolvedByAdmin FKs above.
+        builder.HasOne(message => message.SenderUser)
+            .WithMany(user => user.SentBookingChatMessages)
+            .HasForeignKey(message => message.SenderUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}

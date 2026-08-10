@@ -144,4 +144,21 @@ public class BookingRequestsController : ControllerBase
         var result = await _bookingService.FlagDisputeAsync(id, CurrentUserId, dto.Reason);
         return Ok(result);
     }
+
+    /// <summary>Sends a message on this booking's client/vendor chat thread. Unlocked once the vendor
+    /// has accepted the request.</summary>
+    [HttpPost("{id:long}/messages")]
+    public async Task<ActionResult<BookingChatMessageDto>> SendMessage(long id, [FromBody] SendBookingChatMessageDto dto)
+    {
+        var result = await _bookingService.SendChatMessageAsync(id, CurrentUserId, dto);
+        return Ok(result);
+    }
+
+    /// <summary>Lists this booking's chat messages, oldest first. Pass afterId to poll for only new ones.</summary>
+    [HttpGet("{id:long}/messages")]
+    public async Task<ActionResult<IEnumerable<BookingChatMessageDto>>> GetMessages(long id, [FromQuery] long? afterId)
+    {
+        var result = await _bookingService.GetChatMessagesAsync(id, CurrentUserId, afterId);
+        return Ok(result);
+    }
 }

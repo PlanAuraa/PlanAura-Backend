@@ -34,4 +34,11 @@ public interface IBookingService
     Task<PagedResult<BookingRequestDto>> ListVendorBookingRequestsAsync(long vendorUserId, BookingRequestFilterDto filter);
     Task<BookingRequestDto> GetVendorBookingRequestAsync(long bookingRequestId, long vendorUserId);
     Task<List<BookingStatusHistoryEntryDto>> GetVendorBookingTimelineAsync(long bookingRequestId, long vendorUserId);
+
+    /// <summary>Sends a message on the booking's client/vendor chat thread. Either party may call this —
+    /// unlocked only once the vendor has accepted the booking request.</summary>
+    Task<BookingChatMessageDto> SendChatMessageAsync(long bookingRequestId, long callerUserId, SendBookingChatMessageDto dto);
+
+    /// <summary>Lists the booking's chat messages, oldest first. Pass afterId to fetch only newer ones (polling).</summary>
+    Task<IEnumerable<BookingChatMessageDto>> GetChatMessagesAsync(long bookingRequestId, long callerUserId, long? afterId);
 }

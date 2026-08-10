@@ -2146,6 +2146,181 @@ public class BookingServiceTests
         Assert.Equal(PackagePrice, summary!.TotalAmount);
         Assert.Equal(0m, summary.RemainingAmount);
     }
+
+    // ---------------- SendChatMessageAsync / GetChatMessagesAsync ----------------
+
+    private const long OtherUserId = 999;
+
+    private static ApplicationUser CreateClientUser() => new() { Id = ClientUserId, FullName = "Test Client" };
+
+    /// <summary>
+    /// Wires the repos SendChatMessageAsync/GetChatMessagesAsync need: the booking itself, both
+    /// parties resolvable by domain id (ResolveChatPartiesAsync), and the client/vendor resolvable
+    /// by *caller* user id (IsBookingParticipantAsync) — the latter two independently, since which
+    /// one actually matches is what distinguishes "client calls this" from "vendor calls this" in
+    /// each test below.
+    /// </summary>
+    private Mock<IGenericRepository<BookingChatMessage, long>> SetupChatFixture(
+        BookingRequest booking, Client? clientForCallerCheck, Vendor? vendorForCallerCheck)
+    {
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo.Setup(r => r.GetAsync(booking.Id)).ReturnsAsync(booking);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Client>>())).ReturnsAsync(clientForCallerCheck);
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(CreateClient());
+
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Vendor>>())).ReturnsAsync(vendorForCallerCheck);
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(CreateVendor());
+
+        var userRepo = _unitOfWorkMock.SetupRepository<ApplicationUser, long>();
+        userRepo.Setup(r => r.GetAsync(ClientUserId)).ReturnsAsync(CreateClientUser());
+
+        return _unitOfWorkMock.SetupRepository<BookingChatMessage, long>();
+    }
+
+    [Fact]
+    public async Task SendChatMessageAsync_BeforeVendorAgreed_ThrowsBadRequest()
+    {
+        var booking = CreateBooking(status: BookingStatus.Pending);
+        SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(
+            () => service.SendChatMessageAsync(booking.Id, ClientUserId, new SendBookingChatMessageDto { Content = "Hi" }));
+    }
+
+    [Fact]
+    public async Task SendChatMessageAsync_NonParticipant_ThrowsNotFound()
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        // Neither lookup matches this booking's client/vendor — simulates a third-party caller.
+        SetupChatFixture(booking, clientForCallerCheck: null, vendorForCallerCheck: null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<NotFoundExeption>(
+            () => service.SendChatMessageAsync(booking.Id, OtherUserId, new SendBookingChatMessageDto { Content = "Hi" }));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SendChatMessageAsync_BlankContent_ThrowsBadRequest(string content)
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(
+            () => service.SendChatMessageAsync(booking.Id, ClientUserId, new SendBookingChatMessageDto { Content = content }));
+    }
+
+    [Fact]
+    public async Task SendChatMessageAsync_ContentTooLong_ThrowsBadRequest()
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(() => service.SendChatMessageAsync(
+            booking.Id, ClientUserId, new SendBookingChatMessageDto { Content = new string('a', 2001) }));
+    }
+
+    [Fact]
+    public async Task SendChatMessageAsync_AsClient_PersistsAndNotifiesVendor()
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        var messageRepo = SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        BookingChatMessage? captured = null;
+        messageRepo.Setup(r => r.AddAsync(It.IsAny<BookingChatMessage>()))
+            .Callback<BookingChatMessage>(m => captured = m)
+            .Returns(Task.CompletedTask);
+
+        var service = CreateService();
+        var result = await service.SendChatMessageAsync(booking.Id, ClientUserId, new SendBookingChatMessageDto { Content = "  Hello vendor  " });
+
+        Assert.NotNull(captured);
+        Assert.Equal(booking.Id, captured!.BookingRequestId);
+        Assert.Equal(ClientUserId, captured.SenderUserId);
+        Assert.Equal("Hello vendor", captured.Content);
+
+        Assert.True(result.IsMine);
+        Assert.Equal(ClientUserId, result.SenderUserId);
+        Assert.Equal("Test Client", result.SenderName);
+
+        _unitOfWorkMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationServiceMock.Verify(
+            n => n.NotifyUserAsync(VendorUserId, NotificationTypes.NewChatMessage, It.IsAny<string>(), It.IsAny<string?>(), null),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SendChatMessageAsync_AsVendor_UsesBusinessNameAndNotifiesClient()
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        var messageRepo = SetupChatFixture(booking, clientForCallerCheck: null, vendorForCallerCheck: CreateVendor());
+        messageRepo.Setup(r => r.AddAsync(It.IsAny<BookingChatMessage>())).Returns(Task.CompletedTask);
+
+        var service = CreateService();
+        var result = await service.SendChatMessageAsync(booking.Id, VendorUserId, new SendBookingChatMessageDto { Content = "Hello client" });
+
+        Assert.True(result.IsMine);
+        Assert.Equal(VendorUserId, result.SenderUserId);
+        Assert.Equal("Test Vendor", result.SenderName);
+
+        _notificationServiceMock.Verify(
+            n => n.NotifyUserAsync(ClientUserId, NotificationTypes.NewChatMessage, It.IsAny<string>(), It.IsAny<string?>(), null),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetChatMessagesAsync_BeforeVendorAgreed_ThrowsBadRequest()
+    {
+        var booking = CreateBooking(status: BookingStatus.Pending);
+        SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<BadRequestExeption>(
+            () => service.GetChatMessagesAsync(booking.Id, ClientUserId, afterId: null));
+    }
+
+    [Fact]
+    public async Task GetChatMessagesAsync_Valid_MapsIsMineAndSenderNamePerCaller()
+    {
+        var booking = CreateBooking(status: BookingStatus.Accepted);
+        booking.VendorAgreedAt = DateTimeOffset.UtcNow;
+        var messageRepo = SetupChatFixture(booking, clientForCallerCheck: CreateClient(), vendorForCallerCheck: null);
+
+        var messages = new List<BookingChatMessage>
+        {
+            new() { Id = 1, BookingRequestId = booking.Id, SenderUserId = ClientUserId, Content = "Hi", CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-2) },
+            new() { Id = 2, BookingRequestId = booking.Id, SenderUserId = VendorUserId, Content = "Hello", CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1) },
+        };
+        messageRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<BookingChatMessage>>(), It.IsAny<bool>()))
+            .ReturnsAsync(messages);
+
+        var service = CreateService();
+
+        // As the client: their own message is "mine", the vendor's is not.
+        var asClient = (await service.GetChatMessagesAsync(booking.Id, ClientUserId, afterId: null)).ToList();
+        Assert.Equal(2, asClient.Count);
+        Assert.True(asClient[0].IsMine);
+        Assert.Equal("Test Client", asClient[0].SenderName);
+        Assert.False(asClient[1].IsMine);
+        Assert.Equal("Test Vendor", asClient[1].SenderName);
+    }
 }
 
 internal class DbUpdateConcurrencyException : Exception

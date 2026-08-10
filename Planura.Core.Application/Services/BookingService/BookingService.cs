@@ -1510,6 +1510,129 @@ public class BookingService : IBookingService
         return vendor is not null && booking.VendorId == vendor.Id;
     }
 
+    /// <summary>
+    /// Sends a message on the booking's client/vendor chat thread. Either party may call this (see
+    /// IsBookingParticipantAsync) — unlocked only once the vendor has accepted (VendorAgreedAt set),
+    /// mirroring the same permanent-fact gate the frontend reads directly off BookingRequestDto.
+    /// </summary>
+    public async Task<BookingChatMessageDto> SendChatMessageAsync(long bookingRequestId, long callerUserId, SendBookingChatMessageDto dto)
+    {
+        var content = (dto.Content ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new BadRequestExeption("A message is required.");
+        }
+
+        if (content.Length > 2000)
+        {
+            throw new BadRequestExeption("The message must be 2000 characters or fewer.");
+        }
+
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || !await IsBookingParticipantAsync(booking, callerUserId))
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.VendorAgreedAt is null)
+        {
+            throw new BadRequestExeption("Chat is available once the vendor has accepted this booking request.");
+        }
+
+        var message = new BookingChatMessage
+        {
+            BookingRequestId = bookingRequestId,
+            SenderUserId = callerUserId,
+            Content = content
+        };
+        await _unitOfWork.Repository<BookingChatMessage, long>().AddAsync(message);
+        await _unitOfWork.SaveChangesAsync();
+
+        var parties = await ResolveChatPartiesAsync(booking);
+
+        // Best-effort: the message is already saved, so a notification hiccup must never fail this call.
+        try
+        {
+            var otherPartyUserId = callerUserId == parties.ClientUserId ? parties.VendorUserId : parties.ClientUserId;
+            var preview = content.Length > 120 ? content[..120] + "…" : content;
+            await _notificationService.NotifyUserAsync(otherPartyUserId, NotificationTypes.NewChatMessage, "New message", preview);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send chat notification for booking request {BookingRequestId}.", bookingRequestId);
+        }
+
+        return new BookingChatMessageDto
+        {
+            Id = message.Id,
+            BookingRequestId = bookingRequestId,
+            SenderUserId = callerUserId,
+            SenderName = callerUserId == parties.VendorUserId ? parties.VendorName : parties.ClientName,
+            IsMine = true,
+            Content = message.Content,
+            CreatedAt = message.CreatedAt
+        };
+    }
+
+    /// <summary>
+    /// Lists the booking's chat messages, oldest first. Pass the last-seen message id as afterId to
+    /// fetch only newer ones (the poll-for-new-messages case); omit it for the initial full load.
+    /// </summary>
+    public async Task<IEnumerable<BookingChatMessageDto>> GetChatMessagesAsync(long bookingRequestId, long callerUserId, long? afterId)
+    {
+        var repo = _unitOfWork.Repository<BookingRequest, long>();
+        var booking = await repo.GetAsync(bookingRequestId);
+        if (booking is null || !await IsBookingParticipantAsync(booking, callerUserId))
+        {
+            throw new NotFoundExeption(nameof(BookingRequest), bookingRequestId);
+        }
+
+        if (booking.VendorAgreedAt is null)
+        {
+            throw new BadRequestExeption("Chat is available once the vendor has accepted this booking request.");
+        }
+
+        var parties = await ResolveChatPartiesAsync(booking);
+
+        var messages = await _unitOfWork.Repository<BookingChatMessage, long>()
+            .GetAllWithSpecAsync(new BookingChatMessagesByBookingRequestSpecification(bookingRequestId, afterId));
+
+        return messages.Select(m => new BookingChatMessageDto
+        {
+            Id = m.Id,
+            BookingRequestId = bookingRequestId,
+            SenderUserId = m.SenderUserId,
+            SenderName = m.SenderUserId == parties.VendorUserId ? parties.VendorName : parties.ClientName,
+            IsMine = m.SenderUserId == callerUserId,
+            Content = m.Content,
+            CreatedAt = m.CreatedAt
+        });
+    }
+
+    private readonly record struct ChatParties(long ClientUserId, string ClientName, long VendorUserId, string VendorName);
+
+    /// <summary>
+    /// Resolves both parties' user ids and display names without relying on Client.User/Vendor
+    /// navigation being eager-loaded (BookingRequest.GetAsync is a bare FindAsync, no includes) — the
+    /// vendor's name is its BusinessName (matches how vendors are branded everywhere else), the
+    /// client's is its account FullName.
+    /// </summary>
+    private async Task<ChatParties> ResolveChatPartiesAsync(BookingRequest booking)
+    {
+        var client = await _unitOfWork.Repository<Client, long>().GetAsync(booking.ClientId);
+        var vendor = await _unitOfWork.Repository<Vendor, long>().GetAsync(booking.VendorId);
+        var clientUser = client is null
+            ? null
+            : await _unitOfWork.Repository<ApplicationUser, long>().GetAsync(client.UserId);
+
+        return new ChatParties(
+            client?.UserId ?? 0,
+            clientUser?.FullName ?? "Client",
+            vendor?.UserId ?? 0,
+            vendor?.BusinessName ?? "Vendor");
+    }
+
     private async Task<long> ResolveClientIdAsync(long userId)
     {
         var client = await _unitOfWork.Repository<Client, long>()

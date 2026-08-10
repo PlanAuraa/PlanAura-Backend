@@ -21,4 +21,5 @@ public class ApplicationUser : IdentityUser<long>
     public ICollection<BookingRequest> DisputedBookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<BookingRequest> ResolvedBookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
+    public ICollection<BookingChatMessage> SentBookingChatMessages { get; set; } = new List<BookingChatMessage>();
 }
