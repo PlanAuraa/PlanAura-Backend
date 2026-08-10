@@ -126,9 +126,13 @@ namespace Planura.Core.Application.Services.AdminClient
                 throw new NotFoundExeption(nameof(Client), clientId);
             }
 
+            // Fully-captured spend: full path (Completed) + deposit path once its remainder was collected
+            // (FullyPaid). TotalAmount is the full captured price on the deposit path (Amount is only the
+            // deposit); fall back to Amount for legacy rows. Refunded is excluded.
             client.TotalSpend = _unitOfWork.Repository<Payment, long>().GetQueryable()
-                .Where(p => p.ClientId == clientId && p.Status == PaymentStatus.Completed)
-                .Sum(p => (decimal?)p.Amount) ?? 0m;
+                .Where(p => p.ClientId == clientId
+                    && (p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.FullyPaid))
+                .Sum(p => (decimal?)(p.TotalAmount ?? p.Amount)) ?? 0m;
 
             return await Task.FromResult(client);
         }

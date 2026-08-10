@@ -49,11 +49,13 @@ namespace Planura.Core.Application.Services.AdminDashboard
                 .Repository<BookingRequest, long>()
                 .GetCountAsync(new AllBookingRequestsSpecification());
 
+            // TotalAmount is the full captured price on both paths (Amount is only the deposit on the
+            // deposit path); fall back to Amount for any legacy row. Refunds are excluded by the spec.
             dashboard.TotalRevenue = await _unitOfWork
     .Repository<Planura.Core.Domain.Entities.Payment, long>()
     .GetSumAsync(
         new PaidPaymentsSpecification(),
-        p => p.Amount);
+        p => p.TotalAmount ?? p.Amount);
 
             var now = DateTimeOffset.UtcNow;
             var weekAgo = now.AddDays(-7);
@@ -72,11 +74,11 @@ namespace Planura.Core.Application.Services.AdminDashboard
                 .Count(u => u.LastLoginAt != null && u.LastLoginAt >= thirtyDaysAgo);
 
             dashboard.RevenueThisMonth = _unitOfWork.Repository<Payment, long>().GetQueryable()
-                .Where(p => p.Status == PaymentStatus.Completed
+                .Where(p => (p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.FullyPaid)
                     && p.PaidAt != null
                     && p.PaidAt.Value.Year == now.Year
                     && p.PaidAt.Value.Month == now.Month)
-                .Sum(p => (decimal?)p.Amount) ?? 0m;
+                .Sum(p => (decimal?)(p.TotalAmount ?? p.Amount)) ?? 0m;
 
             dashboard.BookingsByStatus = _unitOfWork.Repository<BookingRequest, long>().GetQueryable()
                 .GroupBy(b => b.Status)

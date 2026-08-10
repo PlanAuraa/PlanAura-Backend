@@ -104,12 +104,15 @@ namespace Planura.Core.Application.Services.AdminPayment
 
             var summary = new AdminPaymentSummaryDto
             {
+                // Revenue = fully-captured payments: full path (Completed) + deposit path once its remainder
+                // was collected (FullyPaid). TotalAmount is the full captured price (Amount is only the deposit
+                // on the deposit path); fall back to Amount for legacy rows. Refunded is excluded from revenue.
                 GrossRevenue = queryable
-                    .Where(p => p.Status == PaymentStatus.Completed)
-                    .Sum(p => (decimal?)p.Amount) ?? 0m,
+                    .Where(p => p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.FullyPaid)
+                    .Sum(p => (decimal?)(p.TotalAmount ?? p.Amount)) ?? 0m,
                 RefundedAmount = queryable
                     .Where(p => p.Status == PaymentStatus.Refunded)
-                    .Sum(p => (decimal?)p.Amount) ?? 0m,
+                    .Sum(p => (decimal?)(p.TotalAmount ?? p.Amount)) ?? 0m,
                 FailedPaymentCount = queryable.Count(p => p.Status == PaymentStatus.Failed),
                 // Both full holds (Authorized) and deposit holds (DepositAuthorized) are money held on a
                 // card awaiting the vendor — both count as pending authorization.
