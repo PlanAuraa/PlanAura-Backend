@@ -28,6 +28,7 @@ public class PlanuraDbContext : IdentityDbContext<ApplicationUser, IdentityRole<
     public DbSet<BookingStatusHistory> BookingStatusHistory => Set<BookingStatusHistory>();
     public DbSet<BookingChatMessage> BookingChatMessages => Set<BookingChatMessage>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<VendorPayout> VendorPayouts => Set<VendorPayout>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<ReviewResponse> ReviewResponses => Set<ReviewResponse>();
     public DbSet<AiEventVisualization> AiEventVisualizations => Set<AiEventVisualization>();

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Planura.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Planura.Infrastructure.Persistence;
 namespace Planura.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PlanuraDbContext))]
-    partial class PlanuraDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260810125643_AddPaymentRefundedAmountAndVendorPayout")]
+    partial class AddPaymentRefundedAmountAndVendorPayout
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1751,9 +1754,6 @@ namespace Planura.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_vendor_payouts");
 
-                    b.HasIndex("RecordedByAdminId")
-                        .HasDatabaseName("ix_vendor_payouts_recorded_by_admin_id");
-
                     b.HasIndex("VendorId")
                         .HasDatabaseName("ix_vendor_payouts_vendor_id");
 
@@ -2384,21 +2384,12 @@ namespace Planura.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Planura.Core.Domain.Entities.VendorPayout", b =>
                 {
-                    b.HasOne("Planura.Core.Domain.Entities.ApplicationUser", "RecordedByAdmin")
-                        .WithMany()
-                        .HasForeignKey("RecordedByAdminId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_vendor_payouts_users_recorded_by_admin_id");
-
                     b.HasOne("Planura.Core.Domain.Entities.Vendor", "Vendor")
                         .WithMany("Payouts")
                         .HasForeignKey("VendorId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_vendor_payouts_vendors_vendor_id");
-
-                    b.Navigation("RecordedByAdmin");
 
                     b.Navigation("Vendor");
                 });

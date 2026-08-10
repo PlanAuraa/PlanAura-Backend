@@ -15,6 +15,14 @@ namespace Planura.Core.Application.Models.AdminPayment
         public long VendorId { get; set; }
         public string? VendorName { get; set; }
         public decimal Amount { get; set; }
+
+        // Derived from Payment.GetAmountCaptured()/TotalAmount, not from Amount above (which is deposit-only
+        // on the deposit path). See Payment.AmountCapturedExpression for why Amount alone is not "paid".
+        public decimal TotalAmount { get; set; }
+        public decimal AmountPaid { get; set; }
+        public decimal RemainingAmount { get; set; }
+        public decimal RefundedAmount { get; set; }
+
         public PaymentStatus Status { get; set; }
         public string? PaymentMethod { get; set; }
         public string? GatewayReference { get; set; }

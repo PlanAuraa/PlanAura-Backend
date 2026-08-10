@@ -40,4 +40,5 @@ public class Vendor
     public ICollection<BookingRequest> BookingRequests { get; set; } = new List<BookingRequest>();
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
     public ICollection<ReviewResponse> ReviewResponses { get; set; } = new List<ReviewResponse>();
+    public ICollection<VendorPayout> Payouts { get; set; } = new List<VendorPayout>();
 }
