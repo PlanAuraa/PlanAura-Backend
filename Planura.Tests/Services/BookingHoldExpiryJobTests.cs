@@ -3,6 +3,7 @@ using Moq;
 using Planura.Core.Application.Abstraction.PaymentGateway;
 using Planura.Core.Application.Services;
 using Planura.Core.Application.Services.BookingHoldExpiryJob;
+using Planura.Core.Application.Specifications;
 using Planura.Core.Domain.Entities;
 using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
@@ -69,6 +70,8 @@ public class BookingHoldExpiryJobTests
         var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
         slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
             .ReturnsAsync(new List<VendorAvailability>());
+        // Pass 2 (past-event expiry) queries BookingRequest directly regardless of pass 1's result.
+        _unitOfWorkMock.SetupRepository<BookingRequest, long>();
 
         var job = CreateJob();
         await job.RunAsync();
@@ -85,6 +88,8 @@ public class BookingHoldExpiryJobTests
         var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
         slotRepo.Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<VendorAvailability>>(), It.IsAny<bool>()))
             .ReturnsAsync(new List<VendorAvailability> { hold });
+        // Pass 2 (past-event expiry) queries BookingRequest directly regardless of pass 1's result.
+        _unitOfWorkMock.SetupRepository<BookingRequest, long>();
 
         var job = CreateJob();
         await job.RunAsync();
@@ -184,6 +189,87 @@ public class BookingHoldExpiryJobTests
         Assert.Equal(BookingStatus.Expired, booking.Status);
         Assert.Equal(PaymentStatus.Authorized, payment.Status);
         Assert.Equal(AvailabilityStatus.Available, hold.Status); // hold reset still happens regardless of void outcome
+
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        _notificationServiceMock.Verify(n => n.NotifyUserAsync(
+            VendorUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Reproduces the reported bug: a Pending booking whose event slot has already ended but whose
+    /// vendor-response-window TTL has NOT elapsed (still Held, HoldExpiresAt in the future) is missed by
+    /// pass 1 entirely — it must still be caught and expired by pass 2.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_PendingBookingPastEventButWithinTtl_StillExpiresBooking()
+    {
+        var booking = CreateBooking();
+        var hold = new VendorAvailability
+        {
+            Id = AvailabilityId,
+            VendorId = VendorId,
+            StartAt = new DateTimeOffset(2026, 8, 9, 10, 0, 0, TimeSpan.Zero),
+            EndAt = new DateTimeOffset(2026, 8, 9, 14, 0, 0, TimeSpan.Zero), // event day already passed
+            Status = AvailabilityStatus.Held,
+            HoldExpiresAt = DateTimeOffset.UtcNow.AddHours(1), // TTL has NOT elapsed
+            BookingRequestId = booking.Id,
+            BookingRequest = booking
+        };
+
+        var slotRepo = _unitOfWorkMock.SetupRepository<VendorAvailability, long>();
+        // Pass 1: no TTL-expired holds.
+        slotRepo
+            .Setup(r => r.GetAllWithSpecAsync(
+                It.Is<ISpecification<VendorAvailability>>(s => s is HeldExpiredVendorAvailabilitySpecification),
+                It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability>());
+        // Release step inside ExpireBookingAsync, reached only via pass 2 here.
+        slotRepo
+            .Setup(r => r.GetAllWithSpecAsync(
+                It.Is<ISpecification<VendorAvailability>>(s => s is VendorAvailabilityByBookingRequestSpecification),
+                It.IsAny<bool>()))
+            .ReturnsAsync(new List<VendorAvailability> { hold });
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        // Pass 2: the past-event query is the one that actually finds this booking.
+        bookingRepo
+            .Setup(r => r.GetAllWithSpecAsync(
+                It.Is<ISpecification<BookingRequest>>(s => s is PendingBookingsPastEventSpecification),
+                It.IsAny<bool>()))
+            .ReturnsAsync(new List<BookingRequest> { booking });
+
+        var historyRepo = _unitOfWorkMock.SetupRepository<BookingStatusHistory, long>();
+        BookingStatusHistory? capturedHistory = null;
+        historyRepo.Setup(r => r.AddAsync(It.IsAny<BookingStatusHistory>()))
+            .Callback<BookingStatusHistory>(h => capturedHistory = h)
+            .Returns(Task.CompletedTask);
+
+        var clientRepo = _unitOfWorkMock.SetupRepository<Client, long>();
+        clientRepo.Setup(r => r.GetAsync(ClientId)).ReturnsAsync(new Client { Id = ClientId, UserId = ClientUserId });
+
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(VendorId)).ReturnsAsync(new Vendor { Id = VendorId, UserId = VendorUserId, BusinessName = "V" });
+
+        var payment = CreateAuthorizedPayment();
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo.Setup(r => r.GetWithSpecAsync(It.IsAny<ISpecification<Payment>>())).ReturnsAsync(payment);
+
+        var job = CreateJob();
+        await job.RunAsync();
+
+        Assert.Equal(BookingStatus.Expired, booking.Status);
+        Assert.Equal(AvailabilityStatus.Available, hold.Status);
+        Assert.Null(hold.BookingRequestId);
+        Assert.Null(hold.HoldExpiresAt);
+
+        Assert.NotNull(capturedHistory);
+        Assert.Equal("Pending", capturedHistory!.PreviousStatus);
+        Assert.Equal("Expired", capturedHistory.NewStatus);
+        Assert.Equal("auto-expired: the event date passed with no vendor response", capturedHistory.Notes);
+
+        _paymentGatewayServiceMock.Verify(g => g.CancelPaymentIntentAsync(It.Is<CancelPaymentIntentRequest>(
+            r => r.PaymentIntentId == "pi_expired_hold")), Times.Once);
 
         _notificationServiceMock.Verify(n => n.NotifyUserAsync(
             ClientUserId, "booking_request_expired", It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);

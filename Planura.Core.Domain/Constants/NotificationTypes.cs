@@ -21,8 +21,6 @@ public static class NotificationTypes
     public const string BookingRequestExpired = "booking_request_expired";
     public const string BookingCompleted = "booking_completed";
     public const string ContractGenerated = "contract_generated";
-    public const string PartnershipAgreementGenerated = "partnership_agreement_generated";
-    public const string PartnershipAgreementPendingReview = "partnership_agreement_pending_review";
 
     public const string DisputeResolved = "dispute_resolved";
     public const string BookingAwaitingConfirmation = "booking_awaiting_confirmation";

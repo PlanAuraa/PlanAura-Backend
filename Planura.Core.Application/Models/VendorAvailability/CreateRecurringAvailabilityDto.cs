@@ -3,8 +3,9 @@ namespace Planura.Core.Application.Models;
 /// <summary>
 /// Generates individual VendorAvailability slots from a weekly pattern (e.g. "every Friday and
 /// Saturday, 14:00-22:00, for the next 3 months") instead of the vendor creating each slot by hand.
-/// StartTime/EndTime are interpreted as UTC, matching how single-slot StartAt/EndAt values already
-/// arrive from the client (ISO strings normalized to UTC).
+/// StartTime/EndTime are plain wall-clock times as the vendor typed them — Planura operates in Egypt,
+/// so they're interpreted as Egypt local time (UTC+3, see VendorAvailabilityService.EgyptUtcOffset)
+/// when combined with StartDate to build each slot's StartAt/EndAt.
 /// </summary>
 public class CreateRecurringAvailabilityDto
 {

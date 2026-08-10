@@ -53,15 +53,18 @@ public class BookingOptions
     /// client requests cancellation. The tier with the highest MinDaysBefore that the booking still
     /// satisfies applies (see BookingService.ResolveCancellationRefund) — so tiers should be listed
     /// with MinDaysBefore descending, ending in a 0-day catch-all. Configurable here so refund
-    /// percentages can change without a code change.
+    /// percentages can change without a code change; always set via the "Booking:CancellationTiers"
+    /// section in appsettings (see the real values there).
+    /// <para>
+    /// Deliberately has NO default seed values here. <c>IConfiguration</c> binds a config array onto
+    /// an existing non-empty List&lt;T&gt; property by appending to it rather than replacing it, so a
+    /// hardcoded default here previously meant every tier from appsettings.json was duplicated at
+    /// runtime (a real client-facing bug: the rendered cancellation policy showed each refund tier
+    /// twice). An empty default avoids the append entirely; if the config section is ever missing,
+    /// this being empty (rather than silently duplicated) is the safer, more visible failure mode.
+    /// </para>
     /// </summary>
-    public List<CancellationTier> CancellationTiers { get; set; } =
-    [
-        new() { MinDaysBefore = 30, RefundPercent = 100 },
-        new() { MinDaysBefore = 14, RefundPercent = 50 },
-        new() { MinDaysBefore = 7, RefundPercent = 25 },
-        new() { MinDaysBefore = 0, RefundPercent = 0 }
-    ];
+    public List<CancellationTier> CancellationTiers { get; set; } = [];
 }
 
 public class CancellationTier

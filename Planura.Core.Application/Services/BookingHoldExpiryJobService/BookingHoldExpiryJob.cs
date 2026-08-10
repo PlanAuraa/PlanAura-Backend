@@ -8,6 +8,17 @@ using Planura.Core.Domain.Repositories;
 
 namespace Planura.Core.Application.Services.BookingHoldExpiryJob;
 
+/// <summary>
+/// Two independent passes, both expiring still-Pending booking requests the vendor never responded to:
+///   1. The vendor-response-window TTL elapsed (<see cref="HeldExpiredVendorAvailabilitySpecification"/>).
+///   2. The event itself has already passed (<see cref="PendingBookingsPastEventSpecification"/>) —
+///      independent of pass 1, because a request made shortly before its own event date can outlive its
+///      response window without the vendor ever having responded: a booking must not remain actionable
+///      (or even visible as "pending") once the date it was for is in the past.
+/// Both passes converge on the same <see cref="ExpireBookingAsync"/>, so a booking caught by either
+/// criterion is expired identically. Pass 2 is queried fresh after pass 1 has already committed, so a
+/// booking matching both never gets processed twice.
+/// </summary>
 public class BookingHoldExpiryJob : IBookingHoldExpiryJob
 {
     private readonly IUnitOfWork _unitOfWork;
@@ -31,58 +42,88 @@ public class BookingHoldExpiryJob : IBookingHoldExpiryJob
     {
         var now = DateTimeOffset.UtcNow;
 
+        await RunTtlExpiryPassAsync(now);
+        await RunPastEventExpiryPassAsync(now);
+    }
+
+    /// <summary>Pass 1: vendor didn't respond before the hold's response-window TTL elapsed.</summary>
+    private async Task RunTtlExpiryPassAsync(DateTimeOffset now)
+    {
         var expiredHolds = await _unitOfWork.Repository<VendorAvailability, long>()
             .GetAllWithSpecAsync(new HeldExpiredVendorAvailabilitySpecification(now));
 
         var toExpire = expiredHolds
             .Where(hold => hold.BookingRequest is not null && hold.BookingRequest.Status == BookingStatus.Pending)
+            .Select(hold => hold.BookingRequest!)
             .ToList();
 
-        foreach (var hold in toExpire)
+        foreach (var booking in toExpire)
         {
-            var booking = hold.BookingRequest!;
-            var previousStatus = booking.Status;
+            await ExpireBookingAsync(booking, now, "auto-expired: vendor did not respond within TTL");
+        }
+    }
 
-            await _unitOfWork.BeginTransactionAsync();
-            try
+    /// <summary>Pass 2: still Pending, but the booked slot's end time has already passed.</summary>
+    private async Task RunPastEventExpiryPassAsync(DateTimeOffset now)
+    {
+        var pastEvent = await _unitOfWork.Repository<BookingRequest, long>()
+            .GetAllWithSpecAsync(new PendingBookingsPastEventSpecification(now));
+
+        foreach (var booking in pastEvent)
+        {
+            await ExpireBookingAsync(booking, now, "auto-expired: the event date passed with no vendor response");
+        }
+    }
+
+    private async Task ExpireBookingAsync(BookingRequest booking, DateTimeOffset now, string historyNote)
+    {
+        var previousStatus = booking.Status;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
+            booking.Status = BookingStatus.Expired;
+            booking.UpdatedAt = now;
+            _unitOfWork.Repository<BookingRequest, long>().Update(booking);
+
+            var holdRepo = _unitOfWork.Repository<VendorAvailability, long>();
+            var holds = await holdRepo.GetAllWithSpecAsync(
+                new VendorAvailabilityByBookingRequestSpecification(booking.Id));
+            foreach (var hold in holds)
             {
-                booking.Status = BookingStatus.Expired;
-                booking.UpdatedAt = now;
-                _unitOfWork.Repository<BookingRequest, long>().Update(booking);
-
                 hold.Status = AvailabilityStatus.Available;
                 hold.BookingRequestId = null;
                 hold.BookingRequest = null;
                 hold.HoldExpiresAt = null;
-                _unitOfWork.Repository<VendorAvailability, long>().Update(hold);
-
-                var history = new BookingStatusHistory
-                {
-                    BookingRequestId = booking.Id,
-                    PreviousStatus = previousStatus.ToString(),
-                    NewStatus = BookingStatus.Expired.ToString(),
-                    ChangedByUserId = null,
-                    Notes = "auto-expired: vendor did not respond within TTL"
-                };
-                await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
-
-                await _unitOfWork.CommitTransactionAsync();
+                holdRepo.Update(hold);
             }
-            catch
+
+            var history = new BookingStatusHistory
             {
-                await _unitOfWork.RollbackTransactionAsync();
-                throw;
-            }
+                BookingRequestId = booking.Id,
+                PreviousStatus = previousStatus.ToString(),
+                NewStatus = BookingStatus.Expired.ToString(),
+                ChangedByUserId = null,
+                Notes = historyNote
+            };
+            await _unitOfWork.Repository<BookingStatusHistory, long>().AddAsync(history);
 
-            var payment = await _unitOfWork.Repository<Payment, long>()
-                .GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(booking.Id));
-            if (payment is not null)
-            {
-                await VoidAuthorizationBestEffortAsync(payment);
-            }
-
-            await NotifyBothPartiesAsync(booking);
+            await _unitOfWork.CommitTransactionAsync();
         }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            throw;
+        }
+
+        var payment = await _unitOfWork.Repository<Payment, long>()
+            .GetWithSpecAsync(new AuthorizedPaymentByBookingRequestSpecification(booking.Id));
+        if (payment is not null)
+        {
+            await VoidAuthorizationBestEffortAsync(payment);
+        }
+
+        await NotifyBothPartiesAsync(booking);
     }
 
     /// <summary>
