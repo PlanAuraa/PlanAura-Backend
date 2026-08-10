@@ -20,6 +20,13 @@ namespace Planura.Core.Application.Models.AdminBooking
         public string? VendorName { get; set; }
 
         public decimal? TotalAmount { get; set; }
+
+        // Derived from the latest Payment row's own captured-amount fields (Payment.GetAmountCaptured()),
+        // never from PaymentStatus below - that enum is only a coarse cache. See Payment.AmountCapturedExpression.
+        public decimal AmountPaid { get; set; }
+        public decimal RemainingAmount { get; set; }
+        public decimal RefundedAmount { get; set; }
+
         public BookingPaymentStatus PaymentStatus { get; set; }
 
         public RefundStatus RefundStatus { get; set; }

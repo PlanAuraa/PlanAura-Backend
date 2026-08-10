@@ -420,6 +420,12 @@ namespace Planura.Core.Application.Services.AdminBooking
             var history = await _unitOfWork.Repository<BookingStatusHistory, long>()
                 .GetAllWithSpecAsync(new BookingStatusHistoryByBookingRequestSpecification(bookingId));
 
+            // Same latest-payment-row pattern BuildPaymentSummary uses for the client/vendor view - a
+            // booking has one payment today, but ordering makes this correct rather than incidentally so.
+            var latestPayment = payments.OrderByDescending(p => p.CreatedAt).FirstOrDefault();
+            var totalAmount = latestPayment?.TotalAmount ?? booking.AgreedPrice ?? 0m;
+            var amountPaid = latestPayment?.GetAmountCaptured() ?? 0m;
+
             return new AdminBookingPaymentDetailDto
             {
                 BookingId = booking.Id,
@@ -435,6 +441,9 @@ namespace Planura.Core.Application.Services.AdminBooking
                 VendorName = booking.Vendor?.BusinessName,
 
                 TotalAmount = booking.AgreedPrice,
+                AmountPaid = amountPaid,
+                RemainingAmount = Math.Max(totalAmount - amountPaid, 0m),
+                RefundedAmount = latestPayment?.RefundedAmount ?? 0m,
                 PaymentStatus = booking.PaymentStatus,
 
                 RefundStatus = booking.RefundStatus,
@@ -460,6 +469,7 @@ namespace Planura.Core.Application.Services.AdminBooking
                     PaidAt = p.PaidAt,
                     CancelledAt = p.CancelledAt,
                     RefundedAt = p.RefundedAt,
+                    RefundedAmount = p.RefundedAmount,
                     RefundReason = p.RefundReason,
                     CreatedAt = p.CreatedAt
                 }).ToList(),

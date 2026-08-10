@@ -15,6 +15,7 @@ namespace Planura.Core.Application.Models.AdminBooking
         public DateTimeOffset? PaidAt { get; set; }
         public DateTimeOffset? CancelledAt { get; set; }
         public DateTimeOffset? RefundedAt { get; set; }
+        public decimal? RefundedAmount { get; set; }
         public string? RefundReason { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
     }

@@ -194,9 +194,9 @@ public class VendorService : IVendorService
         var bookings = (await _unitOfWork.Repository<BookingRequest, long>()
             .GetAllWithSpecAsync(new BookingRequestsByVendorSpecification(vendorId, null, null, false, null, null))).ToList();
 
-        // Revenue = fully-captured payments only: the full-payment path (Completed) and the deposit path
-        // once its remainder was collected (FullyPaid). Deposit bookings still owing the remainder aren't
-        // counted; refunded payments drop out of this set.
+        // Every payment of this vendor's with money currently collected - summed below via
+        // Payment.GetAmountCaptured() (gross of refunds), which includes a deposit the moment it's captured
+        // rather than waiting for the booking to reach FullyPaid.
         var revenuePayments = await _unitOfWork.Repository<Payment, long>()
             .GetAllWithSpecAsync(new RevenuePaymentsByVendorSpecification(vendorId));
 
@@ -215,9 +215,7 @@ public class VendorService : IVendorService
             CompletedRequests = bookings.Count(b => b.Status == BookingStatus.Completed),
             ExpiredRequests = bookings.Count(b => b.Status == BookingStatus.Expired),
             UpcomingBookings = bookings.Count(b => b.Status == BookingStatus.Accepted && b.EventDate >= today),
-            // On the deposit path Amount is only the deposit; TotalAmount is the full captured price. Use
-            // TotalAmount when present (both paths set it), falling back to Amount for any legacy row.
-            TotalRevenue = revenuePayments.Sum(p => p.TotalAmount ?? p.Amount),
+            TotalRevenue = revenuePayments.Sum(p => p.GetAmountCaptured()),
             AvgRating = vendor.AvgRating,
             TotalReviews = vendor.TotalReviews,
             TotalCompletedBookings = vendor.TotalCompletedBookings,

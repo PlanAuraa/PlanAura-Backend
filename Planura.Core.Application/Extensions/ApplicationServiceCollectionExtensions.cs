@@ -9,6 +9,7 @@ using Planura.Core.Application.Services.AdminDashboard;
 using Planura.Core.Application.Services.AdminPayment;
 using Planura.Core.Application.Services.AdminReport;
 using Planura.Core.Application.Services.AdminVendor;
+using Planura.Core.Application.Services.AdminVendorPayoutService;
 using Planura.Core.Application.Services.AiChat;
 using Planura.Core.Application.Services.AiInvitation;
 using Planura.Core.Application.Services.AiVisualizer;
@@ -63,6 +64,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IAdminVendorService, AdminVendorService>();
         services.AddScoped<IAdminClientService, AdminClientService>();
         services.AddScoped<IAdminReportService, AdminReportService>();
+        services.AddScoped<IAdminVendorPayoutService, AdminVendorPayoutService>();
         services.AddScoped<IContractService, ContractService>();
         // Stateless; scoped alongside the services that consume it so a context is always built fresh
         // per request rather than shared across concurrent booking generations.

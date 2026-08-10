@@ -32,5 +32,10 @@ public enum PaymentStatus
     // the client's on-session pay-remainder) atomically transitions DepositPaid_RemainderDue/RemainderFailed
     // into this before charging, so the two can never double-charge. Resolves to FullyPaid on success or
     // back to RemainderFailed on failure. A payment left here (e.g. abandoned SCA) awaits reconciliation.
-    RemainderCharging = 11
+    RemainderCharging = 11,
+
+    // A refund was issued for less than the amount actually captured. Payment.RefundedAmount holds the real
+    // amount returned; the difference is still money the platform holds. Distinguished from Refunded (which
+    // means the whole captured amount came back) so partial refunds stop being reported as full ones.
+    PartiallyRefunded = 12
 }

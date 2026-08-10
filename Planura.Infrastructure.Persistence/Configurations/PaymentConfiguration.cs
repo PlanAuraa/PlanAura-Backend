@@ -11,6 +11,7 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(payment => payment.Amount).HasPrecision(12, 2);
         builder.Property(payment => payment.DepositAmount).HasPrecision(12, 2);
         builder.Property(payment => payment.TotalAmount).HasPrecision(12, 2);
+        builder.Property(payment => payment.RefundedAmount).HasPrecision(12, 2);
         builder.Property(payment => payment.Status)
             .HasConversion<string>()
             .HasMaxLength(30) // widened from 20 to fit "DepositPaid_RemainderDue" (24 chars) with headroom

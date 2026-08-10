@@ -51,5 +51,10 @@ public class BookingPaymentSummaryDto
     public DateTimeOffset? AuthorizedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? RefundedAt { get; set; }
+
+    /// <summary>The amount actually returned to the client so far. Zero unless Status is Refunded or
+    /// PartiallyRefunded.</summary>
+    public decimal RefundedAmount { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 }

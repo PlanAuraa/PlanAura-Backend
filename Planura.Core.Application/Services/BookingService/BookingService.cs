@@ -1898,10 +1898,14 @@ public class BookingService : IBookingService
         // the amount that was authorized, which was the full price on that path.
         var total = payment.TotalAmount ?? payment.Amount;
 
-        var isCaptured = payment.Status is PaymentStatus.Completed or PaymentStatus.DepositPaid_RemainderDue;
         var isHeld = payment.Status is PaymentStatus.Authorized or PaymentStatus.DepositAuthorized;
 
-        var amountPaid = isCaptured ? payment.Amount : 0m;
+        // Payment.GetAmountCaptured() is the single source of truth for "amount paid" - it accounts for
+        // every lifecycle state (deposit-only, remainder charged, remainder failed) instead of the previous
+        // Completed/DepositPaid_RemainderDue-only check, which silently reported 0 once a deposit booking
+        // reached FullyPaid (the remainder is never folded into payment.Amount) and again on RemainderFailed
+        // (which wrongly erased the deposit that was actually collected).
+        var amountPaid = payment.GetAmountCaptured();
 
         return new BookingPaymentSummaryDto
         {
@@ -1914,6 +1918,7 @@ public class BookingService : IBookingService
             IsDeposit = payment.IsDeposit,
             DepositAmount = payment.DepositAmount,
             RemainderCollectionScheduled = false,
+            RefundedAmount = payment.RefundedAmount ?? 0m,
             Status = payment.Status,
             Reference = payment.GatewayReference,
             AuthorizedAt = payment.AuthorizedAt,

@@ -49,13 +49,13 @@ namespace Planura.Core.Application.Services.AdminDashboard
                 .Repository<BookingRequest, long>()
                 .GetCountAsync(new AllBookingRequestsSpecification());
 
-            // TotalAmount is the full captured price on both paths (Amount is only the deposit on the
-            // deposit path); fall back to Amount for any legacy row. Refunds are excluded by the spec.
+            // Sums Payment.AmountCapturedExpression (gross of refunds), not TotalAmount/Amount - a
+            // deposit-only payment's revenue is its deposit, not the booking's full total.
             dashboard.TotalRevenue = await _unitOfWork
-    .Repository<Planura.Core.Domain.Entities.Payment, long>()
-    .GetSumAsync(
-        new PaidPaymentsSpecification(),
-        p => p.TotalAmount ?? p.Amount);
+                .Repository<Planura.Core.Domain.Entities.Payment, long>()
+                .GetSumAsync(
+                    new PaidPaymentsSpecification(),
+                    Planura.Core.Domain.Entities.Payment.AmountCapturedExpression);
 
             var now = DateTimeOffset.UtcNow;
             var weekAgo = now.AddDays(-7);

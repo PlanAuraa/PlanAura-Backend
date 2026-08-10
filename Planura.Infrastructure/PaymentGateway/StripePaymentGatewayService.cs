@@ -234,7 +234,8 @@ namespace Planura.Infrastructure.PaymentGateway
             return new RefundResult
             {
                 RefundId = refund.Id,
-                Status = refund.Status
+                Status = refund.Status,
+                AmountRefundedInSmallestUnit = refund.Amount
             };
         }
 
