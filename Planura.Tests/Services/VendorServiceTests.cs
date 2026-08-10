@@ -5,6 +5,7 @@ using Planura.Core.Application.Models.Vendor;
 using Planura.Core.Application.Services;
 using Planura.Core.Domain.Constants;
 using Planura.Core.Domain.Entities;
+using Planura.Core.Domain.Enums;
 using Planura.Core.Domain.Repositories;
 using Planura.Shared.Errors.Models;
 using Planura.Tests.TestHelpers;
@@ -198,6 +199,45 @@ public class VendorServiceTests
 
         Assert.NotNull(captured);
         Assert.Equal(4, captured!.DisplayOrder);
+    }
+
+    [Fact]
+    public async Task GetDashboardStatsAsync_TotalRevenue_UsesFullCapturedTotalAndIncludesFullyPaidDeposits()
+    {
+        var vendor = CreateVendor(1);
+
+        var vendorRepo = _unitOfWorkMock.SetupRepository<Vendor, long>();
+        vendorRepo.Setup(r => r.GetAsync(vendor.Id)).ReturnsAsync(vendor);
+
+        var bookingRepo = _unitOfWorkMock.SetupRepository<BookingRequest, long>();
+        bookingRepo
+            .Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<BookingRequest>>(), It.IsAny<bool>()))
+            .ReturnsAsync(new List<BookingRequest>());
+
+        // The spec is applied by the (mocked) repo; this list stands in for the revenue-counted payments it
+        // returns. A deposit booking's Amount is only the deposit (200) while TotalAmount is the full captured
+        // price (1000) — the sum must use TotalAmount. The legacy row (null TotalAmount) falls back to Amount.
+        var revenuePayments = new List<Payment>
+        {
+            new() { Id = 1, VendorId = 1, IsDeposit = true, Amount = 200m, TotalAmount = 1000m, Status = PaymentStatus.FullyPaid },
+            new() { Id = 2, VendorId = 1, IsDeposit = false, Amount = 500m, TotalAmount = 500m, Status = PaymentStatus.Completed },
+            new() { Id = 3, VendorId = 1, IsDeposit = false, Amount = 300m, TotalAmount = null, Status = PaymentStatus.Completed }
+        };
+
+        var paymentRepo = _unitOfWorkMock.SetupRepository<Payment, long>();
+        paymentRepo
+            .Setup(r => r.GetAllWithSpecAsync(It.IsAny<ISpecification<Payment>>(), It.IsAny<bool>()))
+            .ReturnsAsync(revenuePayments);
+
+        var packageRepo = _unitOfWorkMock.SetupRepository<VendorPackage, long>();
+        packageRepo
+            .Setup(r => r.GetCountAsync(It.IsAny<ISpecification<VendorPackage>>()))
+            .ReturnsAsync(0);
+
+        var result = await CreateService().GetDashboardStatsAsync(vendor.Id);
+
+        // 1000 (deposit total, not the 200 deposit) + 500 + 300 (legacy fallback). Old code summed Amount => 1000.
+        Assert.Equal(1800m, result.TotalRevenue);
     }
 
     [Fact]

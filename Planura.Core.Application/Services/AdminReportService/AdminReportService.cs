@@ -78,9 +78,10 @@ namespace Planura.Core.Application.Services.AdminReport
             var since = MonthsAgoStart(months);
 
             IEnumerable<MonthlyAmountDto> result = _unitOfWork.Repository<Payment, long>().GetQueryable()
-                .Where(p => p.Status == PaymentStatus.Completed && p.PaidAt != null && p.PaidAt >= since)
+                .Where(p => (p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.FullyPaid)
+                    && p.PaidAt != null && p.PaidAt >= since)
                 .GroupBy(p => new { p.PaidAt!.Value.Year, p.PaidAt!.Value.Month })
-                .Select(g => new MonthlyAmountDto { Year = g.Key.Year, Month = g.Key.Month, Amount = g.Sum(p => p.Amount) })
+                .Select(g => new MonthlyAmountDto { Year = g.Key.Year, Month = g.Key.Month, Amount = g.Sum(p => p.TotalAmount ?? p.Amount) })
                 .OrderBy(row => row.Year).ThenBy(row => row.Month)
                 .ToList();
 
@@ -91,10 +92,13 @@ namespace Planura.Core.Application.Services.AdminReport
         {
             take = take is < 1 or > 50 ? 10 : take;
 
+            // Revenue = fully-captured payments: full path (Completed) + deposit path once its remainder was
+            // collected (FullyPaid). On the deposit path TotalAmount holds the full captured price; Amount is
+            // only the deposit. Refunded drops out.
             var revenueByVendor = _unitOfWork.Repository<Payment, long>().GetQueryable()
-                .Where(p => p.Status == PaymentStatus.Completed)
+                .Where(p => p.Status == PaymentStatus.Completed || p.Status == PaymentStatus.FullyPaid)
                 .GroupBy(p => p.VendorId)
-                .Select(g => new { VendorId = g.Key, Revenue = g.Sum(p => p.Amount) })
+                .Select(g => new { VendorId = g.Key, Revenue = g.Sum(p => p.TotalAmount ?? p.Amount) })
                 .ToDictionary(row => row.VendorId, row => row.Revenue);
 
             var bookingCountByVendor = _unitOfWork.Repository<BookingRequest, long>().GetQueryable()
